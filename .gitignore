@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+ENV/
+
+# ML Models
+*.pt
+*.pth
+*.onnx
+models/weights/
+!models/weights/.gitkeep
+
+# Data
+data/videos/
+data/snapshots/
+data/uploads/
+!data/.gitkeep
+
+# Database
+*.db
+*.sqlite3
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Node
+node_modules/
+frontend/build/
+frontend/dist/
+.DS_Store
+
+# Cache
+.cache/
+*.cache
+redis-data/
+
+# Extras & Scripts
+Extras/
+test-syntax.ps1
+start-services.bat
+start-services.ps1
+
+# Docker
+.dockerignore
