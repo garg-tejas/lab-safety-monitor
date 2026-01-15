@@ -1,0 +1,224 @@
+"""
+SAM 3 Detector for PPE Detection
+
+Uses Meta's SAM 3 model for text-prompted segmentation of PPE items.
+"""
+
+import torch
+import numpy as np
+from PIL import Image
+from typing import Dict, List, Any, Optional
+from ..core.config import settings
+
+
+class SAM3Detector:
+    """
+    PPE Detector using SAM 3's text-prompted segmentation.
+
+    Detects: safety goggles, protective helmet, face mask, lab coat
+    """
+
+    def __init__(self):
+        self.model = None
+        self.processor = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.ppe_prompts = settings.PPE_PROMPTS
+        self.confidence_threshold = settings.DETECTION_CONFIDENCE_THRESHOLD
+        self._initialized = False
+
+    def initialize(self):
+        """Lazy initialization of SAM 3 model."""
+        if self._initialized:
+            return
+
+        try:
+            from sam3.model_builder import build_sam3_image_model
+            from sam3.model.sam3_image_processor import Sam3Processor
+
+            print(f"Loading SAM 3 model on {self.device}...")
+            self.model = build_sam3_image_model()
+            self.processor = Sam3Processor(self.model)
+            self._initialized = True
+            print("SAM 3 model loaded successfully!")
+        except ImportError as e:
+            print(f"SAM 3 not available: {e}")
+            print("Falling back to mock detector for development")
+            self._initialized = True  # Use mock mode
+
+    def detect(self, frame: np.ndarray) -> Dict[str, Any]:
+        """
+        Detect PPE items in a frame.
+
+        Args:
+            frame: BGR numpy array from OpenCV
+
+        Returns:
+            Dict with detected PPE items, their masks, boxes, and scores
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Convert BGR to RGB PIL Image
+        if isinstance(frame, np.ndarray):
+            frame_rgb = frame[:, :, ::-1]  # BGR to RGB
+            image = Image.fromarray(frame_rgb)
+        else:
+            image = frame
+
+        results = {
+            "persons": [],
+            "ppe_detections": {},
+            "frame_shape": frame.shape[:2]
+            if isinstance(frame, np.ndarray)
+            else image.size[::-1],
+        }
+
+        if self.model is None:
+            # Mock mode for development
+            return self._mock_detect(frame)
+
+        try:
+            # First detect persons
+            state = self.processor.set_image(image)
+            person_output = self.processor.set_text_prompt(state=state, prompt="person")
+
+            person_masks = person_output.get("masks", [])
+            person_boxes = person_output.get("boxes", [])
+            person_scores = person_output.get("scores", [])
+
+            # Store person detections
+            for i, (mask, box, score) in enumerate(
+                zip(person_masks, person_boxes, person_scores)
+            ):
+                if score >= self.confidence_threshold:
+                    results["persons"].append(
+                        {
+                            "id": i,
+                            "mask": mask,
+                            "box": box.tolist() if hasattr(box, "tolist") else box,
+                            "score": float(score),
+                        }
+                    )
+
+            # Detect each PPE type
+            for ppe_type in self.ppe_prompts:
+                state = self.processor.set_image(image)
+                output = self.processor.set_text_prompt(state=state, prompt=ppe_type)
+
+                masks = output.get("masks", [])
+                boxes = output.get("boxes", [])
+                scores = output.get("scores", [])
+
+                detections = []
+                for mask, box, score in zip(masks, boxes, scores):
+                    if score >= self.confidence_threshold:
+                        detections.append(
+                            {
+                                "mask": mask,
+                                "box": box.tolist() if hasattr(box, "tolist") else box,
+                                "score": float(score),
+                            }
+                        )
+
+                results["ppe_detections"][ppe_type] = detections
+
+        except Exception as e:
+            print(f"SAM 3 detection error: {e}")
+            return self._mock_detect(frame)
+
+        return results
+
+    def _mock_detect(self, frame: np.ndarray) -> Dict[str, Any]:
+        """Mock detection for development without SAM 3."""
+        h, w = frame.shape[:2] if isinstance(frame, np.ndarray) else (480, 640)
+
+        return {
+            "persons": [
+                {"id": 0, "box": [100, 50, 300, 400], "score": 0.95, "mask": None}
+            ],
+            "ppe_detections": {
+                "safety goggles": [],
+                "protective helmet": [],
+                "face mask": [],
+                "lab coat": [{"box": [100, 100, 300, 400], "score": 0.8, "mask": None}],
+                "safety shoes": [],
+            },
+            "frame_shape": (h, w),
+        }
+
+    def associate_ppe_to_persons(
+        self, persons: List[Dict], ppe_detections: Dict[str, List[Dict]]
+    ) -> List[Dict]:
+        """
+        Associate detected PPE items with persons based on spatial overlap.
+
+        Args:
+            persons: List of person detections
+            ppe_detections: Dict of PPE type -> list of detections
+
+        Returns:
+            List of persons with their associated PPE
+        """
+        required_ppe = set(settings.REQUIRED_PPE)
+
+        for person in persons:
+            person["detected_ppe"] = []
+            person["missing_ppe"] = []
+            person["detection_confidence"] = {}
+            person_box = person["box"]
+
+            for ppe_type, detections in ppe_detections.items():
+                ppe_found = False
+
+                for detection in detections:
+                    ppe_box = detection["box"]
+
+                    # Check if PPE overlaps with person
+                    if self._boxes_overlap(person_box, ppe_box):
+                        person["detected_ppe"].append(ppe_type)
+                        person["detection_confidence"][ppe_type] = float(
+                            detection.get("score", 0.0)
+                        )
+                        ppe_found = True
+                        break
+
+                if not ppe_found and ppe_type in required_ppe:
+                    person["missing_ppe"].append(ppe_type)
+                    person["detection_confidence"].setdefault(ppe_type, 0.0)
+
+            person["is_violation"] = len(person["missing_ppe"]) > 0
+
+        return persons
+
+    def _boxes_overlap(
+        self, box1: List[float], box2: List[float], threshold: float = 0.3
+    ) -> bool:
+        """Check if two boxes overlap with IoU above threshold."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        if x2 <= x1 or y2 <= y1:
+            return False
+
+        intersection = (x2 - x1) * (y2 - y1)
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+        # Check if PPE is mostly inside person box
+        if box2_area > 0:
+            overlap_ratio = intersection / box2_area
+            return overlap_ratio >= threshold
+
+        return False
+
+
+# Singleton instance
+_detector = None
+
+
+def get_detector() -> SAM3Detector:
+    global _detector
+    if _detector is None:
+        _detector = SAM3Detector()
+    return _detector

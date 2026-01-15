@@ -1,0 +1,34 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "MarketWise Lab Safety Monitoring System Backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.128.0",
+    "filterpy>=1.4.5",
+    "onnxruntime-gpu>=1.23.2",
+    "opencv-python>=4.12.0.88",
+    "pipreqs>=0.5.0",
+    "pydantic-settings>=2.12.0",
+    "pydantic[settings]>=2.12.5",
+    "python-multipart>=0.0.21",
+    "scipy>=1.17.0",
+    "sqlalchemy>=2.0.45",
+    "torch>=2.9.1",
+    "torchaudio>=2.9.1",
+    "torchvision>=0.24.1",
+    "uvicorn[standard]>=0.40.0",
+    "websockets>=16.0",
+    "wsproto>=1.3.2",
+    # ML Models
+    "ultralytics>=8.0.0",  # YOLOv8
+    "insightface>=0.7.0",  # Face recognition
+]
+
+[project.optional-dependencies]
+sam2 = [
+    # SAM 2 must be installed separately from GitHub:
+    # pip install git+https://github.com/facebookresearch/sam2.git
+]
