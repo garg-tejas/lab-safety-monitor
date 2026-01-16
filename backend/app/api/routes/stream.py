@@ -6,6 +6,8 @@ Includes annotated video generation for frontend display.
 import asyncio
 import cv2
 import base64
+import numpy as np
+import logging
 from fastapi import (
     APIRouter,
     UploadFile,
@@ -20,6 +22,26 @@ import uuid
 from pydantic import BaseModel
 
 from ...ml.pipeline import get_pipeline
+
+logger = logging.getLogger(__name__)
+
+
+def convert_numpy_types(obj):
+    """Recursively convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: convert_numpy_types(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_types(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
 
 
 class ProcessVideoRequest(BaseModel):
@@ -45,8 +67,8 @@ class VideoProcessingManager:
         job_id = str(uuid.uuid4())
         self.jobs[job_id] = {
             "id": job_id,
-            "video_path": video_path,
-            "filename": filename,
+            "video_path": str(video_path),
+            "filename": str(filename),
             "status": "pending",
             "progress": 0,
             "total_frames": 0,
@@ -61,16 +83,21 @@ class VideoProcessingManager:
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status."""
-        return self.jobs.get(job_id)
+        job = self.jobs.get(job_id)
+        if job:
+            return convert_numpy_types(job)
+        return None
 
     def update_job(self, job_id: str, **kwargs):
         """Update job status."""
         if job_id in self.jobs:
-            self.jobs[job_id].update(kwargs)
+            # Convert numpy types to native Python types
+            converted_kwargs = convert_numpy_types(kwargs)
+            self.jobs[job_id].update(converted_kwargs)
 
     def list_jobs(self) -> List[Dict[str, Any]]:
         """List all jobs."""
-        return list(self.jobs.values())
+        return [convert_numpy_types(job) for job in self.jobs.values()]
 
 
 processing_manager = VideoProcessingManager()
@@ -246,7 +273,15 @@ async def process_video_task(job_id: str, video_path: str):
 
     except Exception as e:
         video_writer.release()
-        processing_manager.update_job(job_id, status="failed", error=str(e))
+        import traceback
+        # Get full traceback for better error reporting
+        error_trace = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+        # Convert numpy types to strings for JSON serialization
+        error_msg = str(e)
+        # Limit error message length to prevent issues
+        if len(error_trace) > 1000:
+            error_trace = error_trace[:1000] + "... (truncated)"
+        processing_manager.update_job(job_id, status="failed", error=error_trace)
 
 
 @router.get("/jobs")
@@ -422,3 +457,154 @@ async def delete_processed_video(job_id: str):
         return {"message": f"Deleted processed video for job {job_id}"}
 
     return {"message": "No processed video to delete"}
+
+
+@router.get("/debug/{job_id}")
+async def get_debug_info(job_id: str):
+    """
+    Get debug information for a processing job.
+    
+    Returns model status, configuration, and detection statistics.
+    """
+    job = processing_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    pipeline = get_pipeline()
+    pipeline.initialize()
+    
+    # Get detector info
+    detector = pipeline.detector
+    detector_info = {
+        "type": type(detector).__name__,
+        "initialized": detector._initialized if hasattr(detector, "_initialized") else False,
+    }
+    
+    # Get YOLOv11 detector info if available
+    yolov11_info = {}
+    if hasattr(detector, "ppe_detector"):
+        ppe_detector = detector.ppe_detector
+        if ppe_detector:
+            yolov11_info = {
+                "model_type": ppe_detector.model_type,
+                "model_loaded": ppe_detector.model is not None,
+                "device": ppe_detector.device,
+                "confidence_threshold": ppe_detector.confidence_threshold,
+                "violation_threshold": getattr(ppe_detector, "violation_threshold", None),
+                "model_path": str(settings.YOLOV11_MODEL_PATH) if settings.YOLOV11_MODEL_PATH else None,
+            }
+    
+    # Get configuration
+    config_info = {
+        "detection_confidence_threshold": settings.DETECTION_CONFIDENCE_THRESHOLD,
+        "violation_confidence_threshold": getattr(settings, "VIOLATION_CONFIDENCE_THRESHOLD", 0.3),
+        "containment_threshold": getattr(settings, "MASK_CONTAINMENT_THRESHOLD", 0.3),
+        "temporal_min_frames": getattr(settings, "TEMPORAL_VIOLATION_MIN_FRAMES", 2),
+        "required_ppe": settings.REQUIRED_PPE,
+    }
+    
+    # Get job statistics
+    job_stats = {
+        "status": job.get("status"),
+        "progress": job.get("progress", 0),
+        "processed_frames": job.get("processed_frames", 0),
+        "total_frames": job.get("total_frames", 0),
+        "violations_count": job.get("violations_count", 0),
+        "persons_count": job.get("persons_count", 0),
+    }
+    
+    return {
+        "job_id": job_id,
+        "job_stats": job_stats,
+        "detector_info": detector_info,
+        "yolov11_info": yolov11_info,
+        "config": config_info,
+        "pipeline_stats": pipeline.get_stats(),
+    }
+
+
+@router.get("/live/feed")
+async def live_webcam_feed():
+    """
+    MJPEG stream from webcam with real-time detection annotations.
+    
+    This endpoint provides a live video feed from the default webcam (index 0)
+    with real-time PPE detection and violation overlays. The stream uses MJPEG
+    format for browser compatibility.
+    
+    Returns:
+        StreamingResponse with MJPEG video stream
+    """
+    import asyncio
+    
+    async def generate_live_frames():
+        """Generate annotated frames from webcam."""
+        pipeline = get_pipeline()
+        pipeline.initialize()
+        
+        cap = cv2.VideoCapture(0)  # Default webcam
+        
+        if not cap.isOpened():
+            # Send error frame
+            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(
+                error_frame,
+                "Webcam not available",
+                (50, 240),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 0, 255),
+                2,
+            )
+            _, buffer = cv2.imencode('.jpg', error_frame)
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n'
+            )
+            return
+        
+        try:
+            frame_skip = max(1, int(30 / settings.FRAME_SAMPLE_RATE))  # Throttle to sample rate
+            frame_count = 0
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                frame_count += 1
+                
+                # Process frame only at sample rate to avoid overload
+                if frame_count % frame_skip == 0:
+                    try:
+                        # Process frame through detection pipeline
+                        result = pipeline.process_frame(frame, video_source="webcam")
+                        annotated = result.get("annotated_frame", frame)
+                    except Exception as e:
+                        # If processing fails, use original frame
+                        logger.error(f"Frame processing error: {e}")
+                        annotated = frame
+                else:
+                    # Use previous annotated frame or current frame
+                    annotated = frame
+                
+                # Encode as JPEG
+                _, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_bytes = buffer.tobytes()
+                
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+                )
+                
+                # Control frame rate (~30 FPS display, but process at sample rate)
+                await asyncio.sleep(0.033)
+        except Exception as e:
+            logger.error(f"Live feed error: {e}", exc_info=True)
+        finally:
+            cap.release()
+    
+    return StreamingResponse(
+        generate_live_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )

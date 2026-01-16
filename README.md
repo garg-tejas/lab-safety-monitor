@@ -2,15 +2,54 @@
 
 AI-powered laboratory safety compliance monitoring using computer vision and deep learning.
 
-## Target Domain: Laboratory Safety
+---
 
-This system is designed for **academic and research laboratory environments** where the following PPE is required:
+## 🎯 Target Domain: Laboratory Safety
 
-- **Safety goggles** - Protective eyewear
-- **Face masks** - Respiratory protection
-- **Lab coats** - Body protection
+**Domain Choice**: This system is designed for **academic and research laboratory environments**.
 
-**Note:** Industrial PPE (hard hats, safety shoes) is not required in typical laboratory settings and is therefore not enforced by default. The system can be reconfigured for industrial use by modifying `REQUIRED_PPE` in `backend/app/core/config.py`.
+The problem statement requires teams to "choose and clearly specify their target domain." We have selected **laboratory safety** as our primary domain, focusing on PPE requirements typical in academic and research lab settings.
+
+### Laboratory vs Industrial PPE Requirements
+
+| PPE Category              | Laboratory Environment | Industrial Environment | Our Implementation        |
+| ------------------------- | ---------------------- | ---------------------- | ------------------------- |
+| **Safety Goggles**        | ✅ Required            | ✅ Required            | ✅ Detected (71.6% mAP50) |
+| **Face Mask**             | ✅ Required            | ✅ Required            | ✅ Detected (80.5% mAP50) |
+| **Lab Coat**              | ✅ Required            | ⚠️ Varies              | ✅ Detected (91.5% mAP50) |
+| **Protective Helmet/Cap** | ❌ Not required        | ✅ Required            | ❌ Not implemented        |
+| **Safety Shoes**          | ❌ Not required        | ✅ Required            | ❌ Not implemented        |
+| **Gloves**                | ⚠️ Optional            | ✅ Required            | ✅ Detected (81.1% mAP50) |
+
+**Rationale for Domain Selection:**
+
+- Laboratory environments have distinct PPE requirements compared to industrial settings
+- Focus on academic/research labs allows for specialized detection models
+- Helmet and safety shoes are not standard requirements in lab environments
+- The system can be extended for industrial use with additional training data
+
+**Extensibility**: The system architecture supports adding industrial PPE detection. To enable helmet/shoes detection:
+
+1. Source or collect training data for these classes
+2. Retrain YOLOv11 model with new classes
+3. Update `REQUIRED_PPE` in `backend/app/core/config.py`
+4. Update detection prompts in configuration
+
+---
+
+## PPE Detection Scope
+
+| PPE Item       | Detected | Required (Lab) | mAP50 | Notes                            |
+| -------------- | -------- | -------------- | ----- | -------------------------------- |
+| Safety Goggles | ✅ Yes   | ✅ Yes         | 71.6% | Acceptable for demo              |
+| Face Mask      | ✅ Yes   | ✅ Yes         | 80.5% | Good performance                 |
+| Lab Coat       | ✅ Yes   | ✅ Yes         | 91.5% | Excellent performance            |
+| Gloves         | ✅ Yes   | Optional       | 81.1% | Detected but not enforced        |
+| Head Mask      | ✅ Yes   | Optional       | N/A   | Detected but not enforced        |
+| Helmet/Cap     | ❌ No    | ❌ No          | N/A   | Not required in lab environments |
+| Safety Shoes   | ❌ No    | ❌ No          | N/A   | Not required in lab environments |
+
+> **Note**: For industrial environments (factories, construction sites), helmet and safety shoes detection would require additional training data. The current model is optimized for laboratory safety compliance.
 
 ## Features
 
@@ -52,7 +91,7 @@ This system is designed for **academic and research laboratory environments** wh
 | ---------------- | ----------------------------------------------- |
 | Frontend         | Next.js 16, TypeScript, Tailwind CSS, shadcn/ui |
 | Backend          | FastAPI, Python 3.11+                           |
-| PPE Detection    | SAM 3 (Meta) / YOLOv8 (Ultralytics)             |
+| PPE Detection    | SAM 3 (Meta) / YOLOv11 (Ultralytics)            |
 | Face Recognition | InsightFace (ArcFace)                           |
 | Tracking         | DeepSORT (Kalman + Hungarian)                   |
 | Database         | SQLite (dev) / PostgreSQL (prod)                |
@@ -183,26 +222,49 @@ python demo.py --mock --output demo_output.mp4
 - `s` - Save screenshot
 - `SPACE` - Pause (video mode)
 
-## PPE Detection
+## Problem Statement Compliance
 
-The system detects PPE items relevant to laboratory environments:
+This section maps the hackathon problem statement requirements to our implementation:
 
-| PPE Item          | Detection Method | Status                   | Required |
-| ----------------- | ---------------- | ------------------------ | -------- |
-| Safety Goggles    | YOLOv8 (trained) | ✅ YOLOv8: 71.6% mAP50   | Yes      |
-| Face Mask         | YOLOv8 (trained) | ✅ YOLOv8: 80.5% mAP50   | Yes      |
-| Lab Coat          | YOLOv8 (trained) | ✅ YOLOv8: 91.5% mAP50   | Yes      |
-| Protective Helmet | Not implemented  | N/A (not needed in labs) | No       |
-| Safety Shoes      | Not implemented  | N/A (not needed in labs) | No       |
+### Functional Requirements
 
-**Detector Selection**: Configure via `DETECTOR_TYPE` in `.env`:
+| Requirement                     | Status         | Implementation Details                                  |
+| ------------------------------- | -------------- | ------------------------------------------------------- |
+| **Input: Live webcam feed**     | ✅ Implemented | MJPEG endpoint at `/api/stream/live/feed`               |
+| **Input: Pre-recorded video**   | ✅ Implemented | Full upload + processing pipeline                       |
+| **Detect human presence**       | ✅ Implemented | YOLOv8 person detection with tracking                   |
+| **Detect helmet/cap**           | ⚠️ Domain N/A  | Not required in lab settings (see domain specification) |
+| **Detect safety shoes**         | ⚠️ Domain N/A  | Not required in lab settings (see domain specification) |
+| **Detect goggles/specs**        | ✅ Implemented | YOLOv11 trained model (71.6% mAP50)                     |
+| **Detect mask**                 | ✅ Implemented | YOLOv11 trained model (80.5% mAP50)                     |
+| **Detect lab coat**             | ✅ Implemented | YOLOv11 trained model (91.5% mAP50)                     |
+| **Associate with individuals**  | ✅ Implemented | Face recognition (InsightFace) + tracking (DeepSORT)    |
+| **Handle multiple individuals** | ✅ Implemented | DeepSORT multi-object tracking                          |
+| **Video feed display**          | ✅ Implemented | VideoPlayer component with streaming                    |
+| **Visual indicators/overlays**  | ✅ Implemented | Bounding boxes + mask overlays                          |
+| **Admin dashboard**             | ✅ Implemented | Next.js dashboard with tabs                             |
+| **Detection logs**              | ✅ Implemented | Events table with filtering                             |
+| **Compliance statistics**       | ✅ Implemented | Stats cards + charts                                    |
+| **Date/time of detection**      | ✅ Implemented | Timestamps on all events                                |
+| **Store compliance records**    | ✅ Implemented | SQLite with full event model                            |
+| **Person identifier**           | ✅ Implemented | Face embeddings + UUIDs                                 |
+| **Detected safety equipment**   | ✅ Implemented | JSON array in events                                    |
+| **Missing safety equipment**    | ✅ Implemented | JSON array in events                                    |
+| **Timestamp**                   | ✅ Implemented | DateTime field                                          |
+| **Video/camera source**         | ✅ Implemented | String field in events                                  |
 
-- `hybrid` - YOLOv8 + SAM2 hybrid (recommended, best accuracy)
-- `yolov8` - Use trained YOLOv8 model (faster, no masks)
+**Legend**: ✅ Fully Implemented | ⚠️ Partially Implemented / Domain N/A | ❌ Not Implemented
+
+### Detector Selection
+
+Configure via `DETECTOR_TYPE` in `.env`:
+
+- `hybrid` - YOLOv11 + SAM2 hybrid (recommended, best accuracy)
+- `YOLOv11` - Use trained YOLOv11 model (faster, no masks)
 - `sam3` - Use SAM 3 text-prompted detection
 - `mock` - Mock detector for development
 
-See [YOLOV8_SETUP.md](YOLOV8_SETUP.md) for integration instructions.
+See [YOLOv11_SETUP.md](YOLOv11_SETUP.md) for integration instructions.
 
 ## Configuration
 
@@ -224,12 +286,12 @@ FACE_RECOGNITION_THRESHOLD=0.6
 USE_MOCK_DETECTOR=false
 USE_MOCK_FACE=false
 
-# Detector Selection: "sam3", "yolov8", or "mock"
-DETECTOR_TYPE=yolov8
+# Detector Selection: "sam3", "YOLOv11", or "mock"
+DETECTOR_TYPE=YOLOv11
 
-# YOLOv8 Model Path (relative to weights/ or absolute)
+# YOLOv11 Model Path (relative to weights/ or absolute)
 # Will auto-detect best.onnx or best.pt in weights/ppe_detector/ if not set
-YOLOV8_MODEL_PATH=weights/ppe_detector/best.onnx
+YOLOv11_MODEL_PATH=weights/ppe_detector/best.onnx
 
 # Video Processing
 FRAME_SAMPLE_RATE=10
@@ -294,17 +356,59 @@ uv run ruff check . --fix
 ### "CUDA out of memory"
 
 - Reduce batch size in config
-- Use CPU mode: `CUDA_VISIBLE_DEVICES="" python demo.py`
+- Use CPU mode: `CUDA_VISIBLE_DEVICES="" uv run uvicorn app.main:app --reload`
+- Reduce `FRAME_SAMPLE_RATE` in config (e.g., from 10 to 5)
 
 ### "Module not found"
 
 - Ensure you're in the virtual environment
 - Run `uv sync` to install dependencies
+- Check that all required packages are in `pyproject.toml`
 
-### "WebSocket connection failed"
+### "Model not found"
+
+- Check `YOLOV11_MODEL_PATH` in `.env` file
+- Ensure model file exists at `backend/weights/ppe_detector/best.pt` or `best.onnx`
+- Use mock mode for testing: `USE_MOCK_DETECTOR=true`
+
+### "WebSocket connection failed" / "Failed to connect to backend"
 
 - Check backend is running on port 8000
-- Check CORS settings in config
+- Check `NEXT_PUBLIC_API_URL` in `frontend/.env.local`
+- Check CORS settings in backend config
+- Verify firewall isn't blocking connections
+
+### "Video processing failed"
+
+- Check video format is supported (mp4, avi, mov, mkv, webm)
+- Verify video file is not corrupted
+- Check backend logs for detailed error messages
+- Try converting video to MP4: `ffmpeg -i input.webm -c:v libx264 output.mp4`
+- Use mock mode to isolate ML issues: `USE_MOCK_DETECTOR=true USE_MOCK_FACE=true`
+
+### "Database error"
+
+- Check `DATABASE_URL` in `.env` file
+- Ensure database file/directory is writable
+- Check SQLite version compatibility
+
+### "Live webcam feed not working"
+
+- Check webcam is connected and accessible
+- Verify webcam permissions (Windows: Privacy settings)
+- Try different webcam index (change `cv2.VideoCapture(0)` to `cv2.VideoCapture(1)`)
+- Check backend logs for webcam initialization errors
+
+### Use Mock Mode for Development
+
+For testing without ML models:
+
+```bash
+cd backend
+USE_MOCK_DETECTOR=true USE_MOCK_FACE=true uv run uvicorn app.main:app --reload
+```
+
+This allows you to test the full system flow without requiring model weights.
 
 ## Future Enhancements
 
@@ -322,7 +426,7 @@ The system includes SAM2 (Segment Anything Model 2) infrastructure for temporal 
 
 ### Live Webcam Streaming
 
-MJPEG live streaming endpoint and frontend player are planned for real-time monitoring scenarios. Currently the system processes pre-recorded videos which is sufficient for most demo and deployment scenarios.
+✅ **Implemented**: MJPEG live streaming endpoint at `/api/stream/live/feed` with real-time detection annotations. The system processes live webcam feeds with the same detection pipeline used for recorded videos.
 
 ### Event Deduplication
 

@@ -18,6 +18,7 @@ export interface ComplianceEvent {
   frame_number?: number;
   detected_ppe: string[];
   missing_ppe: string[];
+  action_violations?: string[];  // Drinking/Eating violations
   is_violation: boolean;
   // Event deduplication fields
   start_frame?: number | null;
@@ -142,6 +143,13 @@ class ApiClient {
     return this.fetch<Person[]>(`/api/persons/top/violators?limit=${limit}`);
   }
 
+  async updatePerson(personId: string, name: string | null): Promise<Person> {
+    return this.fetch<Person>(`/api/persons/${personId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  }
+
   // Video processing endpoints
   async getProcessingStatus(): Promise<ProcessingStatus> {
     return this.fetch<ProcessingStatus>('/api/stream/status');
@@ -196,6 +204,11 @@ class ApiClient {
   // Get the URL for streaming the processed video as MJPEG
   getProcessedVideoStreamUrl(jobId: string): string {
     return `${this.baseUrl}/api/stream/processed/${jobId}/stream`;
+  }
+
+  // Get the URL for live webcam feed with real-time detection
+  getLiveFeedUrl(): string {
+    return `${this.baseUrl}/api/stream/live/feed`;
   }
 }
 

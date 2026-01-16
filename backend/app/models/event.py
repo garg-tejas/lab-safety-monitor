@@ -30,6 +30,7 @@ class ComplianceEvent(Base):
     # Detection results
     detected_ppe = Column(JSON, default=list)  # ["goggles", "lab_coat"]
     missing_ppe = Column(JSON, default=list)  # ["mask"]
+    action_violations = Column(JSON, default=list)  # ["drinking", "eating"]
 
     # Violation info
     is_violation = Column(Boolean, default=False)

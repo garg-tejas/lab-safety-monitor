@@ -27,6 +27,7 @@ class EventService:
         detection_confidence: Optional[dict] = None,
         snapshot_path: Optional[str] = None,
         start_frame: Optional[int] = None,
+        action_violations: Optional[List[str]] = None,
     ) -> ComplianceEvent:
         """Create and persist a compliance event."""
         event = ComplianceEvent(
@@ -37,6 +38,7 @@ class EventService:
             frame_number=frame_number,
             detected_ppe=detected_ppe,
             missing_ppe=missing_ppe,
+            action_violations=action_violations or [],
             is_violation=is_violation,
             detection_confidence=detection_confidence or {},
             snapshot_path=snapshot_path,

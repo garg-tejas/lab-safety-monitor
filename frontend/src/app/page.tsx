@@ -15,38 +15,47 @@ import {
   Activity,
   TrendingUp,
   Camera,
+  Power,
+  PowerOff,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import api, {
   SummaryStats,
   ComplianceEvent,
   TimelineData,
   PPEBreakdown,
+  Person,
 } from "@/lib/api";
+import { PersonsTable } from "@/components/persons-table";
 
 export default function Dashboard() {
   const [stats, setStats] = useState<SummaryStats | null>(null);
   const [recentViolations, setRecentViolations] = useState<ComplianceEvent[]>([]);
   const [timeline, setTimeline] = useState<TimelineData[]>([]);
   const [ppeBreakdown, setPPEBreakdown] = useState<PPEBreakdown[]>([]);
+  const [persons, setPersons] = useState<Person[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [liveFeedEnabled, setLiveFeedEnabled] = useState(false);
 
   useEffect(() => {
     async function fetchData() {
       try {
         setLoading(true);
-        const [statsData, violationsData, timelineData, ppeData] =
+        const [statsData, violationsData, timelineData, ppeData, personsData] =
           await Promise.all([
             api.getSummaryStats(),
             api.getRecentViolations(5),
             api.getViolationTimeline(7),
             api.getViolationsByPPE(),
+            api.getPersons(1, 50),
           ]);
 
         setStats(statsData);
         setRecentViolations(violationsData);
         setTimeline(timelineData);
         setPPEBreakdown(ppeData);
+        setPersons(personsData.persons);
         setError(null);
       } catch (err) {
         console.error("Failed to fetch dashboard data:", err);
@@ -67,7 +76,7 @@ export default function Dashboard() {
     }
 
     fetchData();
-    
+
     // Refresh every 30 seconds
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
@@ -162,12 +171,79 @@ export default function Dashboard() {
               <Activity className="w-4 h-4" />
               Events Log
             </TabsTrigger>
+            <TabsTrigger value="persons" className="flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Persons
+            </TabsTrigger>
           </TabsList>
 
           {/* Live Monitor Tab */}
           <TabsContent value="monitor" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="lg:col-span-2">
+              <div className="lg:col-span-2 space-y-4">
+                {/* Live Webcam Feed */}
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <Camera className="w-5 h-5" />
+                        Live Webcam Feed
+                      </CardTitle>
+                      <Button
+                        variant={liveFeedEnabled ? "destructive" : "default"}
+                        size="sm"
+                        onClick={() => setLiveFeedEnabled(!liveFeedEnabled)}
+                        className="flex items-center gap-2"
+                      >
+                        {liveFeedEnabled ? (
+                          <>
+                            <PowerOff className="w-4 h-4" />
+                            Stop Feed
+                          </>
+                        ) : (
+                          <>
+                            <Power className="w-4 h-4" />
+                            Start Feed
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {liveFeedEnabled ? (
+                      <>
+                        <div className="relative aspect-video bg-gray-900 rounded-lg overflow-hidden">
+                          <img
+                            src={api.getLiveFeedUrl()}
+                            alt="Live webcam feed with real-time detection"
+                            className="w-full h-full object-contain"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect fill='%23333' width='640' height='480'/%3E%3Ctext fill='%23fff' x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-family='Arial' font-size='20'%3EWebcam not available%3C/text%3E%3C/svg%3E";
+                            }}
+                          />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">
+                          Real-time PPE detection and violation monitoring from webcam
+                        </p>
+                      </>
+                    ) : (
+                      <div className="relative aspect-video bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center">
+                        <div className="text-center">
+                          <Camera className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                          <p className="text-sm text-gray-500">
+                            Live feed is disabled
+                          </p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Click "Start Feed" to enable real-time monitoring
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Video Processing */}
                 <VideoPlayer />
               </div>
               <div>
@@ -229,6 +305,28 @@ export default function Dashboard() {
               </CardHeader>
               <CardContent>
                 <EventsTable events={recentViolations} loading={loading} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Persons Tab */}
+          <TabsContent value="persons">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="w-5 h-5" />
+                  Tracked Persons
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PersonsTable
+                  persons={persons}
+                  loading={loading}
+                  onUpdate={async () => {
+                    const data = await api.getPersons(1, 50);
+                    setPersons(data.persons);
+                  }}
+                />
               </CardContent>
             </Card>
           </TabsContent>

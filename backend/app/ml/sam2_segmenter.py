@@ -8,6 +8,7 @@ and video propagation support.
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
+import os
 
 try:
     import torch
@@ -19,11 +20,54 @@ from ..core.config import settings
 
 # SAM2 model configuration mapping
 SAM2_CONFIG_MAP = {
-    "sam2.1_hiera_tiny": "sam2.1_hiera_t.yaml",
-    "sam2.1_hiera_small": "sam2.1_hiera_s.yaml",
-    "sam2.1_hiera_base_plus": "sam2.1_hiera_b+.yaml",
-    "sam2.1_hiera_large": "sam2.1_hiera_l.yaml",
+    "sam2.1_hiera_tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
+    "sam2.1_hiera_small": "configs/sam2.1/sam2.1_hiera_s.yaml",
+    "sam2.1_hiera_base_plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "sam2.1_hiera_large": "configs/sam2.1/sam2.1_hiera_l.yaml",
+    # Fallback configs (older format)
+    "sam2_hiera_tiny": "sam2_hiera_t.yaml",
+    "sam2_hiera_small": "sam2_hiera_s.yaml",
+    "sam2_hiera_base_plus": "sam2_hiera_b+.yaml",
+    "sam2_hiera_large": "sam2_hiera_l.yaml",
 }
+
+
+def get_sam2_config_path(model_type: str) -> str:
+    """Get the correct config path for SAM2, handling different installation methods."""
+    try:
+        import sam2
+        sam2_dir = Path(sam2.__file__).parent
+
+        # Map model type to filename
+        model_config_name = {
+            "sam2.1_hiera_tiny": "sam2.1_hiera_t.yaml",
+            "sam2.1_hiera_small": "sam2.1_hiera_s.yaml",
+            "sam2.1_hiera_base_plus": "sam2.1_hiera_b+.yaml",
+            "sam2.1_hiera_large": "sam2.1_hiera_l.yaml",
+            "sam2_hiera_tiny": "sam2_hiera_t.yaml",
+            "sam2_hiera_small": "sam2_hiera_s.yaml",
+            "sam2_hiera_base_plus": "sam2_hiera_b+.yaml",
+            "sam2_hiera_large": "sam2_hiera_l.yaml",
+        }.get(model_type, "sam2.1_hiera_b+.yaml")
+
+        # Check various paths - prioritize absolute paths
+        search_paths = [
+            sam2_dir / "configs" / "sam2.1" / model_config_name,
+            sam2_dir / "configs" / "sam2" / model_config_name.replace("sam2.1_", "sam2_"),
+            sam2_dir / model_config_name.replace("sam2.1_", "sam2_"),
+            sam2_dir / model_config_name,
+        ]
+
+        for config_path in search_paths:
+            if config_path.exists():
+                print(f"Found SAM2 config at: {config_path}")
+                return str(config_path)
+
+        # Return the Hydra-style config name as fallback (might work if Hydra is configured)
+        return SAM2_CONFIG_MAP.get(model_type, "sam2.1_hiera_b+.yaml")
+
+    except ImportError:
+        return SAM2_CONFIG_MAP.get(model_type, "sam2.1_hiera_b+.yaml")
 
 
 class SAM2Segmenter:
@@ -82,7 +126,8 @@ class SAM2Segmenter:
         if model_path is None:
             model_path = settings.WEIGHTS_DIR / "sam2" / "sam2.1_hiera_base_plus.pt"
 
-        config_name = SAM2_CONFIG_MAP.get(model_type, "sam2_hiera_b+.yaml")
+        # Get config path - try to find the actual config file
+        config_name = get_sam2_config_path(model_type)
 
         if not Path(model_path).exists():
             raise FileNotFoundError(
@@ -93,6 +138,7 @@ class SAM2Segmenter:
             )
 
         print(f"Loading SAM2 model: {model_type} from {model_path}")
+        print(f"Using config: {config_name}")
 
         # Build image predictor for single-frame segmentation
         self.model = build_sam2(config_name, str(model_path), device=self.device)
@@ -144,8 +190,8 @@ class SAM2Segmenter:
         if labels is None:
             labels = ["object"] * len(boxes)
 
-        # Convert BGR to RGB
-        frame_rgb = frame[:, :, ::-1]
+        # Convert BGR to RGB (use .copy() to avoid negative stride issues with CUDA)
+        frame_rgb = frame[:, :, ::-1].copy()
 
         # Set image
         self.predictor.set_image(frame_rgb)
@@ -348,8 +394,8 @@ class SAM2Segmenter:
         self._frame_idx += 1
 
         try:
-            # Convert to RGB
-            frame_rgb = frame[:, :, ::-1]
+            # Convert to RGB (use .copy() to avoid negative stride issues)
+            frame_rgb = frame[:, :, ::-1].copy()
 
             # Propagate to next frame
             out_obj_ids, out_mask_logits = self.video_predictor.propagate_in_video(

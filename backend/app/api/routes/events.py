@@ -17,6 +17,7 @@ class EventResponse(BaseModel):
     frame_number: int = 0
     detected_ppe: List[str]
     missing_ppe: List[str]
+    action_violations: List[str] = []  # Drinking/Eating violations
     is_violation: bool
     # Event deduplication fields
     start_frame: Optional[int] = None

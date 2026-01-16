@@ -37,9 +37,9 @@ class Track:
         return np.array([state[0], state[1], state[2], state[3]]).flatten()
 
     def get_box(self) -> List[float]:
-        """Get current bounding box [x1, y1, x2, y2]."""
+        """Get current bounding box [x1, y1, x2, y2] as native Python floats."""
         x, y, w, h = self.get_state()
-        return [x - w / 2, y - h / 2, x + w / 2, y + h / 2]
+        return [float(x - w / 2), float(y - h / 2), float(x + w / 2), float(y + h / 2)]
 
 
 class DeepSORTTracker:
@@ -47,19 +47,22 @@ class DeepSORTTracker:
     DeepSORT tracker implementation.
 
     Maintains tracks across frames using motion prediction and appearance features.
+    Integrates with PersonGallery for re-identification across track deletions.
     """
 
     # Thresholds
-    MAX_AGE = 30  # Max frames to keep unmatched track
+    MAX_AGE = 90  # Max frames to keep unmatched track (increased from 30)
     MIN_HITS = 3  # Min hits before track is confirmed
     IOU_THRESHOLD = 0.3  # Min IOU for matching
     APPEARANCE_THRESHOLD = 0.7  # Max cosine distance for appearance matching
     MAX_APPEARANCE_FEATURES = 100  # Max features to store per track
 
-    def __init__(self):
+    def __init__(self, person_gallery=None):
         self.tracks: List[Track] = []
         self.next_id = 1
         self.frame_count = 0
+        self.person_gallery = person_gallery  # Optional PersonGallery for re-ID
+        self._on_track_deleted_callback = None
 
     def _create_kalman_filter(self, bbox: List[float]) -> KalmanFilter:
         """
@@ -216,18 +219,15 @@ class DeepSORTTracker:
         )
 
         # Match tentative tracks with remaining detections (IOU only)
-        matched_tent, matched_dets_tent, unmatched_tracks_tent, unmatched_dets = (
-            self._match(
-                tentative_tracks,
-                [detections[i] for i in unmatched_dets],
-                use_appearance=False,
-            )
+        # Note: matching against all detections, not just unmatched
+        matched_tent, matched_dets_tent, unmatched_tracks_tent, unmatched_dets_tent = (
+            self._match(tentative_tracks, detections, use_appearance=False)
         )
 
-        # Remap tentative matches to original detection indices
-        det_index_map = {i: idx for i, idx in enumerate(unmatched_dets)}
-        matched_dets_tent_remapped = [det_index_map[i] for i in matched_dets_tent]
-        unmatched_dets_final = [unmatched_dets[i] for i in unmatched_dets]
+        # matched_dets_tent and unmatched_dets_tent already contain indices
+        # into the original detections list - no remapping needed
+        matched_dets_tent_remapped = matched_dets_tent
+        unmatched_dets_final = unmatched_dets_tent
 
         # Update matched tracks
         for track_idx, det_idx in zip(matched_tracks, matched_dets):
@@ -258,12 +258,12 @@ class DeepSORTTracker:
                 box = track.get_box()
                 results.append(
                     {
-                        "track_id": track.track_id,
+                        "track_id": int(track.track_id),
                         "box": box,
                         "state": track.state,
                         "person_id": track.person_id,
-                        "age": track.age,
-                        "hits": track.hits,
+                        "age": int(track.age),
+                        "hits": int(track.hits),
                     }
                 )
 
@@ -302,8 +302,8 @@ class DeepSORTTracker:
         matched_dets = []
         for row, col in zip(row_indices, col_indices):
             if cost_matrix[row, col] <= threshold:
-                matched_tracks.append(row)
-                matched_dets.append(col)
+                matched_tracks.append(int(row))
+                matched_dets.append(int(col))
 
         unmatched_tracks = [i for i in range(len(tracks)) if i not in matched_tracks]
         unmatched_dets = [i for i in range(len(detections)) if i not in matched_dets]
@@ -369,6 +369,8 @@ class DeepSORTTracker:
         tracks_to_keep = []
 
         for track in self.tracks:
+            was_deleted = track.state == "deleted"
+
             if track.state == "tentative":
                 if track.hits >= self.MIN_HITS:
                     track.state = "confirmed"
@@ -377,6 +379,11 @@ class DeepSORTTracker:
             elif track.state == "confirmed":
                 if track.time_since_update > self.MAX_AGE:
                     track.state = "deleted"
+
+            # Callback for deleted tracks (save features to gallery)
+            if track.state == "deleted" and not was_deleted:
+                if self._on_track_deleted_callback is not None:
+                    self._on_track_deleted_callback(track, self.frame_count)
 
             if track.state != "deleted":
                 tracks_to_keep.append(track)
@@ -400,6 +407,15 @@ class DeepSORTTracker:
     def get_confirmed_tracks(self) -> List[Track]:
         """Get all confirmed tracks."""
         return [t for t in self.tracks if t.state == "confirmed"]
+
+    def set_on_track_deleted(self, callback):
+        """
+        Set callback for when a track is deleted.
+
+        Callback receives: (track: Track, frame_count: int)
+        This allows saving features to PersonGallery before track is lost.
+        """
+        self._on_track_deleted_callback = callback
 
     def reset(self):
         """Reset tracker state."""

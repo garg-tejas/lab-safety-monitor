@@ -22,6 +22,8 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "websockets>=16.0",
     "wsproto>=1.3.2",
+    "requests>=2.31.0",  # For manual model downloads
+    "tqdm>=4.66.0",  # Progress bars for downloads
     # ML Models
     "ultralytics>=8.0.0",  # YOLOv8
     "insightface>=0.7.0",  # Face recognition

@@ -5,10 +5,13 @@ Uses a sliding window buffer to prevent flickering alerts.
 Only triggers violations that persist for multiple consecutive frames.
 """
 
+import logging
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Set, Optional
 from dataclasses import dataclass
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,7 +32,7 @@ class TemporalFilter:
     reducing false positives from momentary detection failures.
     """
 
-    def __init__(self, buffer_size: int = 3, min_frames_for_violation: int = 3):
+    def __init__(self, buffer_size: int = 3, min_frames_for_violation: int = 2):
         """
         Args:
             buffer_size: Number of frames to keep in history
@@ -68,6 +71,10 @@ class TemporalFilter:
 
         # Need enough history
         if len(history) < self.min_frames:
+            logger.debug(
+                f"Temporal filter: insufficient history for {person_id} "
+                f"({len(history)} < {self.min_frames} frames)"
+            )
             return {
                 "is_violation": False,
                 "stable_missing_ppe": [],
@@ -102,6 +109,7 @@ class TemporalFilter:
         else:
             # Clear violation if it existed
             if person_id in self.active_violations:
+                logger.debug(f"Temporal filter: clearing violation for {person_id}")
                 del self.active_violations[person_id]
 
             return {
@@ -138,6 +146,6 @@ def get_temporal_filter() -> TemporalFilter:
 
         _filter = TemporalFilter(
             buffer_size=settings.TEMPORAL_BUFFER_SIZE,
-            min_frames_for_violation=settings.TEMPORAL_BUFFER_SIZE,
+            min_frames_for_violation=getattr(settings, "TEMPORAL_VIOLATION_MIN_FRAMES", 2),
         )
     return _filter

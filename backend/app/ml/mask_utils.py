@@ -393,15 +393,36 @@ def draw_person_with_ppe(
         ppe_label = ppe.get("label", "ppe")
         ppe_box = ppe.get("box", [0, 0, 0, 0])
         ppe_mask = ppe.get("mask")
-        ppe_color = get_color(ppe_label)
+        is_violation_ppe = ppe.get("is_violation", False)
+        
+        # Use red color for violation PPE boxes
+        if is_violation_ppe:
+            ppe_color = (0, 0, 255)  # Red for violations
+        else:
+            ppe_color = get_color(ppe_label)
 
         # Draw PPE mask
         if show_masks and ppe_mask is not None:
             result = draw_mask_overlay(result, ppe_mask, ppe_color, mask_alpha * 0.8)
 
-        # Draw PPE box
+        # Draw PPE box (thicker for violations)
         px1, py1, px2, py2 = [int(c) for c in ppe_box]
-        cv2.rectangle(result, (px1, py1), (px2, py2), ppe_color, 1)
+        thickness = 2 if is_violation_ppe else 1
+        cv2.rectangle(result, (px1, py1), (px2, py2), ppe_color, thickness)
+        
+        # Add label for violations
+        if is_violation_ppe:
+            display_name = ppe.get("display_name", ppe_label)
+            label = f"Missing: {display_name}"
+            cv2.putText(
+                result,
+                label,
+                (px1, py1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (0, 0, 255),
+                1,
+            )
 
     # Build label
     label = f"T{track_id}"

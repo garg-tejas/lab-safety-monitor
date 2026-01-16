@@ -1,28 +1,39 @@
 """
 Person Detector
 
-Lightweight person detector using pretrained YOLOv8-nano.
-Auto-downloads the model on first run (~6MB).
+Person detector using pretrained YOLOv8-medium with native tracking.
+Auto-downloads the model on first run.
 Only detects COCO class 0 (person).
+Supports native YOLOv8 tracking via model.track().
 """
 
 import numpy as np
 from typing import List, Dict, Any, Optional
+import os
+import shutil
 
 try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None
 
+try:
+    import requests
+    from tqdm import tqdm
+except ImportError:
+    requests = None
+    tqdm = None
+
 from ..core.config import settings
 
 
 class PersonDetector:
     """
-    Lightweight person detector using pretrained YOLOv8-nano.
+    Person detector using pretrained YOLOv8-medium with native tracking.
 
     Uses COCO-pretrained model which detects 80 classes,
     but we only extract class 0 (person).
+    Supports native YOLOv8 tracking for consistent track_ids across frames.
     """
 
     PERSON_CLASS_ID = 0  # COCO class ID for person
@@ -44,7 +55,7 @@ class PersonDetector:
 
     def initialize(self) -> None:
         """
-        Initialize the YOLOv8-nano model.
+        Initialize the YOLOv8-medium model.
         Auto-downloads if not present.
         """
         if self._initialized:
@@ -56,21 +67,115 @@ class PersonDetector:
                 "Install with: pip install ultralytics"
             )
 
-        # YOLOv8-nano auto-downloads to ~/.cache/ultralytics
+        # YOLOv8-medium auto-downloads to ~/.cache/ultralytics
         # or we can specify a local path
-        model_path = settings.WEIGHTS_DIR / "person_detector" / "yolov8n.pt"
+        model_path = settings.WEIGHTS_DIR / "person_detector" / "yolov8m.pt"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
 
         if model_path.exists():
             print(f"Loading person detector from: {model_path}")
-            self.model = YOLO(str(model_path))
+            try:
+                self.model = YOLO(str(model_path))
+            except Exception as e:
+                print(f"Warning: Failed to load local model ({e}), attempting download...")
+                # Delete corrupted file
+                model_path.unlink(missing_ok=True)
+                # Fall through to download logic below
         else:
             # Auto-download from ultralytics hub
-            print("Downloading YOLOv8-nano model for person detection...")
-            self.model = YOLO("yolov8n.pt")
-
-            # Save to local weights directory for future use
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            # Note: ultralytics auto-caches, so this is optional
+            print("Downloading YOLOv8-medium model for person detection...")
+            max_retries = 1
+            last_error = None
+            
+            # First try ultralytics auto-download
+            for attempt in range(max_retries + 1):
+                try:
+                    self.model = YOLO("yolov8m.pt")
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        print(f"Ultralytics download attempt {attempt + 1} failed: {e}")
+                        print("Clearing cache and retrying...")
+                        # Try clearing ultralytics cache
+                        cache_dir = os.path.expanduser("~/.cache/ultralytics")
+                        if os.path.exists(cache_dir):
+                            try:
+                                shutil.rmtree(cache_dir)
+                                print("Cache cleared, retrying download...")
+                            except Exception as e2:
+                                print(f"Warning: Could not clear cache: {e2}")
+                        # Also try clearing any partial downloads in weights dir
+                        weights_cache = settings.WEIGHTS_DIR / "person_detector"
+                        if weights_cache.exists():
+                            for file in weights_cache.glob("*.pt"):
+                                try:
+                                    file.unlink()
+                                    print(f"Removed potentially corrupted file: {file}")
+                                except Exception:
+                                    pass
+            
+            # If ultralytics download failed, try manual download
+            if self.model is None:
+                print("Ultralytics auto-download failed, attempting manual download...")
+                model_url = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8m.pt"
+                
+                if requests is None:
+                    raise RuntimeError(
+                        f"Failed to download YOLOv8-medium model. "
+                        f"Ultralytics error: {last_error}. "
+                        f"Manual download requires 'requests' package. "
+                        f"Install with: pip install requests tqdm"
+                    ) from last_error
+                
+                try:
+                    print(f"Downloading from: {model_url}")
+                    response = requests.get(model_url, stream=True, timeout=30)
+                    response.raise_for_status()
+                    
+                    total_size = int(response.headers.get('content-length', 0))
+                    model_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Download with progress bar if tqdm available
+                    if tqdm is not None:
+                        with open(model_path, 'wb') as f, tqdm(
+                            desc="Downloading yolov8m.pt",
+                            total=total_size,
+                            unit='B',
+                            unit_scale=True,
+                            unit_divisor=1024,
+                        ) as bar:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    bar.update(len(chunk))
+                    else:
+                        # Simple download without progress bar
+                        with open(model_path, 'wb') as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                    
+                    print(f"Model downloaded successfully to: {model_path}")
+                    # Now load the manually downloaded model
+                    self.model = YOLO(str(model_path))
+                    
+                except Exception as e:
+                    # Clean up partial download
+                    if model_path.exists():
+                        try:
+                            model_path.unlink()
+                        except Exception:
+                            pass
+                    
+                    raise RuntimeError(
+                        f"Failed to download YOLOv8-medium model. "
+                        f"Ultralytics error: {last_error}. "
+                        f"Manual download error: {e}. "
+                        f"Please check your internet connection and try again. "
+                        f"Or manually download from: {model_url} "
+                        f"and place it at: {model_path}"
+                    ) from e
 
         # Move to appropriate device
         self.model.to(self.device)
@@ -114,7 +219,7 @@ class PersonDetector:
                 continue
 
             for i, box in enumerate(boxes):
-                # Extract coordinates
+                # Extract coordinates and convert to native Python types
                 xyxy = box.xyxy[0].cpu().numpy()
                 conf = float(box.conf[0].cpu().numpy())
                 cls = int(box.cls[0].cpu().numpy())
@@ -126,10 +231,74 @@ class PersonDetector:
                 persons.append(
                     {
                         "id": i,
-                        "box": xyxy.tolist(),
+                        "box": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
                         "score": conf,
                         "label": "person",
                         "mask": None,  # Will be filled by SAM2
+                    }
+                )
+
+        return persons
+
+    def detect_with_tracking(self, frame: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Detect persons with YOLOv8 native tracking.
+
+        Args:
+            frame: BGR numpy array from OpenCV
+
+        Returns:
+            List of person detections, each with:
+                - id: Detection index
+                - track_id: Consistent track ID across frames (from YOLOv8)
+                - box: [x1, y1, x2, y2]
+                - score: Confidence score
+                - label: "person"
+        """
+        if not self._initialized:
+            self.initialize()
+
+        if self.model is None:
+            return []
+
+        # Use YOLOv8 native tracking
+        results = self.model.track(
+            frame,
+            persist=True,  # Maintain track_ids across frames
+            conf=self.confidence_threshold,
+            classes=[self.PERSON_CLASS_ID],  # Only detect persons
+            verbose=False,
+        )
+
+        persons = []
+        for result in results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+
+            # Get track_ids (None if tracking not available)
+            if boxes.id is not None:
+                track_ids = boxes.id.int().cpu().tolist()
+            else:
+                track_ids = [None] * len(boxes)
+
+            for i, (box, track_id) in enumerate(zip(boxes.xyxy, track_ids)):
+                # Extract coordinates and convert to native Python types
+                xyxy = box.cpu().numpy()
+                conf = float(boxes.conf[i].cpu().numpy())
+                cls = int(boxes.cls[i].cpu().numpy())
+
+                # Only include person class (should already be filtered, but double-check)
+                if cls != self.PERSON_CLASS_ID:
+                    continue
+
+                persons.append(
+                    {
+                        "id": i,
+                        "track_id": int(track_id) if track_id is not None else None,
+                        "box": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                        "score": conf,
+                        "label": "person",
                     }
                 )
 

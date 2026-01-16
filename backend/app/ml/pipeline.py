@@ -1,20 +1,19 @@
 """
 Main Detection Pipeline
 
-Orchestrates detection, face recognition, DeepSORT tracking, and temporal filtering.
-Now supports YOLO + SAM2 hybrid detection with mask visualization.
+Orchestrates detection, YOLOv8 native tracking, and temporal filtering.
+Uses YOLOv8 native tracking for consistent person track_ids.
 """
 
 import cv2
 import numpy as np
-from typing import Dict, List, Any, Optional, Tuple, Generator
+import logging
+from typing import Dict, List, Any, Optional, Generator
 from datetime import datetime
 from uuid import uuid4
 
 from .detector_factory import get_detector
-from .face_recognition import get_face_recognizer, FaceRecognizer
 from .temporal_filter import get_temporal_filter
-from .tracker import get_tracker, DeepSORTTracker
 from .mask_utils import (
     draw_person_with_ppe,
     draw_frame_info,
@@ -23,6 +22,8 @@ from .mask_utils import (
 )
 from ..core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class DetectionPipeline:
     """
@@ -30,22 +31,15 @@ class DetectionPipeline:
 
     Flow:
     1. Sample frame at target FPS
-    2. Detect persons and PPE using configured detector
-    3. Run DeepSORT tracker for consistent person tracking
-    4. Detect faces and extract embeddings
-    5. Link face identities to tracks
-    6. Apply temporal filtering
-    7. Generate compliance events
+    2. Detect persons (with YOLOv8 native tracking) and PPE using configured detector
+    3. Associate PPE with persons
+    4. Apply temporal filtering
+    5. Generate compliance events
     """
 
     def __init__(self):
         self.detector = get_detector()
-        self.face_recognizer = get_face_recognizer()
         self.temporal_filter = get_temporal_filter()
-        self.tracker = get_tracker()
-
-        # Known persons: id -> embedding
-        self.known_persons: Dict[str, np.ndarray] = {}
 
         # Frame sampling
         self.target_fps = settings.FRAME_SAMPLE_RATE
@@ -61,7 +55,6 @@ class DetectionPipeline:
     def initialize(self):
         """Initialize all ML models."""
         self.detector.initialize()
-        self.face_recognizer.initialize()
 
     def process_frame(
         self, frame: np.ndarray, video_source: str = "video"
@@ -81,7 +74,6 @@ class DetectionPipeline:
             self.current_video_source = video_source
             if hasattr(self.detector, "reset_video_state"):
                 self.detector.reset_video_state()
-            self.tracker.reset()
             self.temporal_filter.clear_all()
             self.frame_count = 0
 
@@ -98,225 +90,146 @@ class DetectionPipeline:
             "annotated_frame": None,
         }
 
-        # 1. Detect persons and PPE
+        # 1. Detect persons (with YOLOv8 native tracking) and PPE
         detections = self.detector.detect(frame)
         persons = detections.get("persons", [])
         ppe_detections = detections.get("ppe_detections", {})
+        violation_detections = detections.get("violation_detections", {})
+        action_violations = detections.get("action_violations", [])
+        
+        # Log detection results for debugging
+        total_violations = sum(len(dets) for dets in violation_detections.values())
+        total_ppe = sum(len(dets) for dets in ppe_detections.values())
+        if total_violations > 0 or total_ppe > 0:
+            logger.info(
+                f"Pipeline: Frame {self.frame_count} - "
+                f"{len(persons)} persons, {total_ppe} PPE items, "
+                f"{total_violations} violations detected"
+            )
+            if total_violations > 0:
+                logger.info(f"Violation types: {list(violation_detections.keys())}")
+        elif self.frame_count % 30 == 0:  # Log every 30 frames if no detections
+            logger.warning(
+                f"Pipeline: Frame {self.frame_count} - "
+                f"No PPE or violations detected. "
+                f"Persons: {len(persons)}"
+            )
 
-        # 2. Associate PPE with persons
-        persons = self.detector.associate_ppe_to_persons(persons, ppe_detections)
-
-        # 3. Detect faces and extract embeddings for appearance features
-        faces = self.face_recognizer.detect_faces(frame)
-
-        # 4. Prepare detections for tracker (add appearance features)
-        tracker_detections = []
-        for person in persons:
-            det = {
-                "box": person.get("box", [0, 0, 0, 0]),
-                "appearance_feature": None,
-                "original_person": person,
-            }
-
-            # Try to get face embedding as appearance feature
-            person_box = person.get("box", [0, 0, 0, 0])
-            for face in faces:
-                face_box = face.get("box", [0, 0, 0, 0])
-                if self._boxes_overlap(person_box, face_box):
-                    if face.get("embedding") is not None:
-                        det["appearance_feature"] = face["embedding"]
-                        det["face"] = face
-                    break
-
-            tracker_detections.append(det)
-
-        # 5. Update DeepSORT tracker
-        tracked_objects = self.tracker.update(tracker_detections)
-        result["tracks"] = tracked_objects
-
-        # 6. Build person results with consistent track IDs
-        track_to_person_map = self._build_track_person_map(
-            tracked_objects, tracker_detections, faces
+        # 2. Associate PPE and violations with persons
+        persons = self.detector.associate_ppe_to_persons(
+            persons, ppe_detections, violation_detections, action_violations
         )
+        
+        # Log association results
+        associated_violations = sum(
+            1 for p in persons 
+            if p.get("missing_ppe") or p.get("is_violation", False)
+        )
+        if associated_violations > 0:
+            logger.info(
+                f"Pipeline: {associated_violations} persons with violations after association"
+            )
+            for person in persons:
+                if person.get("missing_ppe") or person.get("is_violation", False):
+                    logger.info(
+                        f"  Person {person.get('track_id')}: "
+                        f"missing_ppe={person.get('missing_ppe', [])}, "
+                        f"ppe_detections={len(person.get('ppe_detections', []))}"
+                    )
 
-        for track_info in tracked_objects:
-            track_id = track_info["track_id"]
-            person_data = track_to_person_map.get(track_id, {})
-
-            # Get person_id (from face recognition) or use track-based ID
-            person_id, face_embedding = self._get_person_id_for_track(track_info, faces)
-
-            # Link person_id to track for future frames
-            if person_id and not person_id.startswith("track_"):
-                self.tracker.link_person_id(track_id, person_id)
-            elif track_info.get("person_id"):
-                # Use previously linked person_id
-                person_id = track_info["person_id"]
-                face_embedding = None
+        # 3. Process each person (persons already have track_id from YOLOv8)
+        for person in persons:
+            track_id = person.get("track_id")
+            
+            # Use track_id directly as person_id
+            if track_id is not None:
+                person_id = f"person_{track_id}"
             else:
-                person_id = f"track_{track_id}"
-                face_embedding = None
+                # Fallback if tracking not available
+                person_id = f"track_{person.get('id', 0)}"
+                track_id = person.get("id", 0)
 
             person_result = {
                 "person_id": person_id,
                 "track_id": track_id,
-                "track_state": track_info.get("state", "unknown"),
-                "box": track_info.get("box", [0, 0, 0, 0]),
-                "mask": person_data.get("mask"),
-                "detected_ppe": person_data.get("detected_ppe", []),
-                "missing_ppe": person_data.get("missing_ppe", []),
-                "detection_confidence": person_data.get("detection_confidence", {}),
-                "ppe_detections": person_data.get("ppe_detections", []),
-                "face_embedding": face_embedding,
+                "box": person.get("box", [0, 0, 0, 0]),
+                "detected_ppe": person.get("detected_ppe", []),
+                "missing_ppe": person.get("missing_ppe", []),
+                "action_violations": person.get("action_violations", []),
+                "detection_confidence": person.get("detection_confidence", {}),
+                "ppe_detections": person.get("ppe_detections", []),
             }
 
-            # 7. Apply temporal filtering (only for confirmed tracks)
-            if track_info.get("state") == "confirmed":
-                filter_result = self.temporal_filter.update(
-                    person_id, person_result.get("missing_ppe", [])
-                )
+            # 4. Apply temporal filtering
+            filter_result = self.temporal_filter.update(
+                person_id, person_result.get("missing_ppe", [])
+            )
 
-                person_result["stable_violation"] = filter_result["is_violation"]
-                person_result["stable_missing_ppe"] = filter_result[
-                    "stable_missing_ppe"
-                ]
+            person_result["stable_violation"] = filter_result["is_violation"]
+            person_result["stable_missing_ppe"] = filter_result["stable_missing_ppe"]
 
-                # 8. Generate event if stable violation
-                if filter_result["is_violation"]:
-                    event = {
-                        "id": str(uuid4()),
+            # Check for action violations (Drinking/Eating) - these are immediate violations
+            action_viols = person_result.get("action_violations", [])
+            has_action_violation = len(action_viols) > 0
+
+            # 5. Generate event if stable PPE violation OR action violation
+            if filter_result["is_violation"] or has_action_violation:
+                # Combine missing PPE with action violations for the event
+                all_violations = list(filter_result["stable_missing_ppe"])
+                for av in action_viols:
+                    all_violations.append(f"{av['action']} in lab")
+
+                event = {
+                    "id": str(uuid4()),
+                    "person_id": person_id,
+                    "track_id": track_id,
+                    "timestamp": timestamp.isoformat(),
+                    "video_source": video_source,
+                    "frame_number": self.frame_count,
+                    "detected_ppe": person_result.get("detected_ppe", []),
+                    "missing_ppe": filter_result["stable_missing_ppe"],
+                    "action_violations": [av["action"] for av in action_viols],
+                    "is_violation": True,
+                    "detection_confidence": person_result.get("detection_confidence", {}),
+                }
+                result["events"].append(event)
+                result["violations"].append(
+                    {
                         "person_id": person_id,
                         "track_id": track_id,
-                        "timestamp": timestamp.isoformat(),
-                        "video_source": video_source,
-                        "frame_number": self.frame_count,
-                        "detected_ppe": person_result.get("detected_ppe", []),
                         "missing_ppe": filter_result["stable_missing_ppe"],
-                        "is_violation": True,
-                        "face_embedding": person_result.get("face_embedding"),
-                        "detection_confidence": person_result.get(
-                            "detection_confidence", {}
-                        ),
+                        "action_violations": [av["action"] for av in action_viols],
+                        "box": person_result.get("box"),
                     }
-                    result["events"].append(event)
-                    result["violations"].append(
-                        {
-                            "person_id": person_id,
-                            "track_id": track_id,
-                            "missing_ppe": filter_result["stable_missing_ppe"],
-                            "box": person_result.get("box"),
-                        }
-                    )
-            else:
-                person_result["stable_violation"] = False
-                person_result["stable_missing_ppe"] = []
+                )
 
             result["persons"].append(person_result)
+            # Also add to tracks for API compatibility
+            result["tracks"].append({
+                "track_id": track_id,
+                "person_id": person_id,
+                "box": person_result.get("box"),
+            })
 
-        # 9. Annotate frame with masks
-        result["annotated_frame"] = self._annotate_frame(frame, result["persons"])
+        # 6. Annotate frame (include unassociated violations for visualization)
+        result["annotated_frame"] = self._annotate_frame(
+            frame, result["persons"], violation_detections, action_violations
+        )
 
         return result
 
-    def _build_track_person_map(
+    def _annotate_frame(
         self,
-        tracked_objects: List[Dict],
-        tracker_detections: List[Dict],
-        faces: List[Dict],
-    ) -> Dict[int, Dict]:
-        """
-        Map track IDs to original person detection data.
-        Uses IOU matching between track boxes and detection boxes.
-        """
-        track_to_person = {}
-
-        for track in tracked_objects:
-            track_box = track.get("box", [0, 0, 0, 0])
-            best_iou = 0.0
-            best_person = None
-
-            for det in tracker_detections:
-                det_box = det.get("box", [0, 0, 0, 0])
-                iou = self._calculate_iou(track_box, det_box)
-
-                if iou > best_iou:
-                    best_iou = iou
-                    best_person = det.get("original_person", {})
-
-            if best_person and best_iou > 0.3:
-                track_to_person[track["track_id"]] = {
-                    "detected_ppe": best_person.get("detected_ppe", []),
-                    "missing_ppe": best_person.get("missing_ppe", []),
-                    "detection_confidence": best_person.get("detection_confidence", {}),
-                    "mask": best_person.get("mask"),
-                    "ppe_detections": best_person.get("ppe_detections", []),
-                }
-
-        return track_to_person
-
-    def _get_person_id_for_track(
-        self, track_info: Dict, faces: List[Dict]
-    ) -> Tuple[Optional[str], Optional[np.ndarray]]:
-        """
-        Identify person for a track using face recognition.
-        Returns (person_id, embedding).
-        """
-        track_box = track_info.get("box", [0, 0, 0, 0])
-
-        # Find face that overlaps with track box
-        for face in faces:
-            face_box = face.get("box", [0, 0, 0, 0])
-            if self._boxes_overlap(track_box, face_box):
-                embedding = face.get("embedding")
-                if embedding is not None:
-                    # Try to match with known persons
-                    known_list = list(self.known_persons.items())
-                    match = self.face_recognizer.find_matching_person(
-                        embedding, known_list
-                    )
-
-                    if match:
-                        person_id, _similarity = match
-                        return person_id, embedding
-                    else:
-                        # New person - register them
-                        person_id = f"person_{len(self.known_persons) + 1}"
-                        self.known_persons[person_id] = embedding
-                        return person_id, embedding
-
-        return None, None
-
-    def _calculate_iou(self, box1: List[float], box2: List[float]) -> float:
-        """Calculate Intersection over Union between two boxes."""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-
-        if x2 < x1 or y2 < y1:
-            return 0.0
-
-        intersection = (x2 - x1) * (y2 - y1)
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        union = area1 + area2 - intersection
-
-        return intersection / union if union > 0 else 0.0
-
-    def _boxes_overlap(self, box1: List[float], box2: List[float]) -> bool:
-        """Check if two boxes overlap."""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-
-        return x2 > x1 and y2 > y1
-
-    def _annotate_frame(self, frame: np.ndarray, persons: List[Dict]) -> np.ndarray:
+        frame: np.ndarray,
+        persons: List[Dict],
+        violation_detections: Optional[Dict[str, List[Dict]]] = None,
+        action_violations: Optional[List[Dict]] = None,
+    ) -> np.ndarray:
         """
         Draw annotations on frame with masks and boxes.
 
         Uses mask_utils for drawing when masks are available.
+        Also draws unassociated violation boxes for debugging.
         """
         annotated = frame.copy()
 
@@ -335,11 +248,59 @@ class DetectionPipeline:
                 mask_alpha=self.mask_alpha,
             )
 
+        # Draw unassociated violation boxes (for debugging)
+        # These are violations detected by YOLOv11 but not yet associated with a person
+        if violation_detections:
+            unassociated_count = 0
+            for ppe_type, viol_list in violation_detections.items():
+                for viol in viol_list:
+                    viol_box = viol.get("box", [0, 0, 0, 0])
+                    viol_score = viol.get("score", 0.0)
+                    if viol_box != [0, 0, 0, 0]:
+                        x1, y1, x2, y2 = [int(c) for c in viol_box]
+                        # Draw red box for violations
+                        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                        # Add label with score (matching YOLOv11 direct output format like "No Head Mask 0.85")
+                        label = f"{ppe_type} {viol_score:.2f}"
+                        cv2.putText(
+                            annotated,
+                            label,
+                            (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.4,
+                            (0, 0, 255),
+                            1,
+                        )
+                        unassociated_count += 1
+            if unassociated_count > 0:
+                logger.info(f"Drawing {unassociated_count} unassociated violation boxes on frame {self.frame_count}")
+
+        # Draw unassociated action violations
+        if action_violations:
+            for action in action_violations:
+                action_box = action.get("box", [0, 0, 0, 0])
+                if action_box != [0, 0, 0, 0]:
+                    x1, y1, x2, y2 = [int(c) for c in action_box]
+                    # Draw red box for action violations
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    # Add label
+                    action_type = action.get("action", "violation")
+                    label = f"Action: {action_type}"
+                    cv2.putText(
+                        annotated,
+                        label,
+                        (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4,
+                        (0, 0, 255),
+                        1,
+                    )
+
         # Draw frame info
         annotated = draw_frame_info(
             annotated,
             self.frame_count,
-            len(self.tracker.get_confirmed_tracks()),
+            len(persons),  # Number of tracked persons
             num_violations,
         )
 
@@ -376,26 +337,21 @@ class DetectionPipeline:
         finally:
             cap.release()
 
-    def load_known_persons(self, persons: List[Tuple[str, bytes]]):
-        """Load known persons from database."""
-        for person_id, embedding_bytes in persons:
-            embedding = FaceRecognizer.deserialize_embedding(embedding_bytes)
-            self.known_persons[person_id] = embedding
+    def load_known_persons(self, persons: List):
+        """Load known persons from database (legacy support, not used with YOLOv8 tracking)."""
+        # Not needed with YOLOv8 native tracking, but kept for API compatibility
+        pass
 
     def get_stats(self) -> Dict[str, Any]:
         """Get current pipeline statistics."""
         return {
             "frame_count": self.frame_count,
-            "known_persons": len(self.known_persons),
-            "active_tracks": len(self.tracker.tracks),
-            "confirmed_tracks": len(self.tracker.get_confirmed_tracks()),
             "current_video": self.current_video_source,
         }
 
     def reset(self):
         """Reset pipeline state."""
         self.temporal_filter.clear_all()
-        self.tracker.reset()
         self.frame_count = 0
         self.current_video_source = None
 

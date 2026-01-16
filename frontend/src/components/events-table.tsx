@@ -42,7 +42,7 @@ export function EventsTable({ events, loading = false }: EventsTableProps) {
           <TableHead>Status</TableHead>
           <TableHead>Duration</TableHead>
           <TableHead>Detected PPE</TableHead>
-          <TableHead>Missing PPE</TableHead>
+          <TableHead>Violations</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -93,14 +93,25 @@ export function EventsTable({ events, loading = false }: EventsTableProps) {
             </TableCell>
             <TableCell>
               <div className="flex flex-wrap gap-1">
-                {event.missing_ppe.length > 0 ? (
+                {/* Missing PPE violations */}
+                {event.missing_ppe.length > 0 && (
                   event.missing_ppe.map((ppe) => (
                     <Badge key={ppe} variant="destructive" className="text-xs">
-                      {formatPPE(ppe)}
+                      No {formatPPE(ppe)}
                     </Badge>
                   ))
-                ) : (
-                  <span className="text-green-600 text-sm">All present</span>
+                )}
+                {/* Action violations (Drinking/Eating) */}
+                {event.action_violations && event.action_violations.length > 0 && (
+                  event.action_violations.map((action) => (
+                    <Badge key={action} variant="destructive" className="text-xs bg-orange-600">
+                      {formatAction(action)}
+                    </Badge>
+                  ))
+                )}
+                {/* Show compliant if no violations */}
+                {event.missing_ppe.length === 0 && (!event.action_violations || event.action_violations.length === 0) && (
+                  <span className="text-green-600 text-sm">Compliant</span>
                 )}
               </div>
             </TableCell>
@@ -118,4 +129,9 @@ function formatPPE(ppe: string): string {
     .split(" ")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+function formatAction(action: string): string {
+  // Capitalize first letter of action (e.g., "drinking" -> "Drinking")
+  return action.charAt(0).toUpperCase() + action.slice(1);
 }

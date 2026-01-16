@@ -27,7 +27,7 @@ export function VideoProcessor() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [viewingJobId, setViewingJobId] = useState<string | null>(null);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(true); // Default to streaming mode
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -171,7 +171,7 @@ export function VideoProcessor() {
 
   const handleViewProcessed = (jobId: string) => {
     setViewingJobId(jobId);
-    setIsStreaming(false);
+    setIsStreaming(true); // Default to streaming mode as processed video loading often fails
   };
 
   const handleCloseViewer = () => {
@@ -268,7 +268,7 @@ export function VideoProcessor() {
                 className="text-xs"
                 onClick={() => setIsStreaming(!isStreaming)}
               >
-                {isStreaming ? "Switch to Video" : "Switch to Stream"}
+                {isStreaming ? "Switch to Video File" : "Switch to Stream"}
               </Button>
             </div>
           </div>

@@ -60,7 +60,7 @@ class SAM3Detector:
 
         # Convert BGR to RGB PIL Image
         if isinstance(frame, np.ndarray):
-            frame_rgb = frame[:, :, ::-1]  # BGR to RGB
+            frame_rgb = frame[:, :, ::-1].copy()  # BGR to RGB (copy to avoid negative stride)
             image = Image.fromarray(frame_rgb)
         else:
             image = frame
