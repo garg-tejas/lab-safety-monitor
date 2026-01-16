@@ -267,9 +267,16 @@ export default function Dashboard() {
                                 <p className="font-medium text-sm">
                                   {event.person_id || "Unknown"}
                                 </p>
-                                <p className="text-xs text-red-600">
-                                  Missing: {event.missing_ppe.join(", ")}
-                                </p>
+                                {event.missing_ppe.length > 0 && (
+                                  <p className="text-xs text-red-600">
+                                    Missing: {event.missing_ppe.join(", ")}
+                                  </p>
+                                )}
+                                {event.action_violations && event.action_violations.length > 0 && (
+                                  <p className="text-xs text-orange-600">
+                                    Action: {event.action_violations.join(", ")}
+                                  </p>
+                                )}
                               </div>
                               <span className="text-xs text-gray-500">
                                 {new Date(event.timestamp).toLocaleTimeString()}

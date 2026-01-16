@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # ML Settings
     SAM3_MODEL: str = "facebook/sam3"
+    USE_SAM3: bool = Field(default=True)  # Use SAM3 instead of SAM2
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
     VIOLATION_CONFIDENCE_THRESHOLD: float = 0.3
     FACE_RECOGNITION_THRESHOLD: float = 0.6
@@ -46,6 +47,22 @@ class Settings(BaseSettings):
     TEMPORAL_BUFFER_SIZE: int = 3
     TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
 
+    # SAM2 propagation settings
+    SAM2_PROPAGATE_INTERVAL: int = Field(default=2)  # Propagate every N frames
+    SAM2_SEGMENT_PPE: bool = Field(default=True)  # Also segment PPE items
+
+    # Confidence fusion settings
+    TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")  # "mean", "ema", "max"
+    TEMPORAL_EMA_ALPHA: float = Field(default=0.7)  # Weight for most recent frame (EMA)
+    TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)  # Threshold after fusion
+
+    # Multi-scale detection settings (improves small object detection like goggles)
+    MULTI_SCALE_ENABLED: bool = Field(default=True)  # Enable multi-scale detection
+    MULTI_SCALE_FACTORS: List[float] = Field(default=[1.0, 1.5, 2.0])  # Scale factors
+    MULTI_SCALE_NMS_THRESHOLD: float = Field(
+        default=0.5
+    )  # NMS IoU threshold for merging
+
     PPE_PROMPTS: List[str] = Field(
         default=[
             "safety goggles",
@@ -69,7 +86,7 @@ class Settings(BaseSettings):
             "Googles": "safety goggles",
             "Mask": "face mask",
             "Lab Coat": "lab coat",
-            "Head Mask": "protective helmet",
+            "Head Mask": "head mask",  # Align with yolov11_detector.py CLASS_MAPPING
             "Gloves": "gloves",
         }
     )
@@ -120,7 +137,9 @@ class Settings(BaseSettings):
 
         if self.SAM2_MODEL_PATH is None:
             object.__setattr__(
-                self, "SAM2_MODEL_PATH", self.WEIGHTS_DIR / "sam2" / "sam2.1_hiera_base_plus.pt"
+                self,
+                "SAM2_MODEL_PATH",
+                self.WEIGHTS_DIR / "sam2" / "sam2.1_hiera_base_plus.pt",
             )
 
         # Prefer PyTorch over ONNX for better compatibility with ultralytics
@@ -136,7 +155,9 @@ class Settings(BaseSettings):
             logger.warning(
                 f"⚠️ Selected ONNX model (PyTorch not found): {onnx_path.absolute()}"
             )
-            logger.warning("⚠️ ONNX parsing may have issues - consider using PyTorch (.pt) model")
+            logger.warning(
+                "⚠️ ONNX parsing may have issues - consider using PyTorch (.pt) model"
+            )
         elif self.YOLOV11_MODEL_PATH is None:
             object.__setattr__(self, "YOLOV11_MODEL_PATH", pt_path)
             logger.warning(

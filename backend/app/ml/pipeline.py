@@ -33,7 +33,7 @@ class DetectionPipeline:
     1. Sample frame at target FPS
     2. Detect persons (with YOLOv8 native tracking) and PPE using configured detector
     3. Associate PPE with persons
-    4. Apply temporal filtering
+    4. Apply temporal filtering (with confidence fusion if available)
     5. Generate compliance events
     """
 
@@ -51,6 +51,11 @@ class DetectionPipeline:
         # Visualization settings
         self.show_masks = getattr(settings, "SHOW_MASKS", True)
         self.mask_alpha = getattr(settings, "MASK_ALPHA", 0.4)
+
+        # Confidence-based filtering settings
+        self.use_confidence_fusion = (
+            getattr(settings, "TEMPORAL_FUSION_STRATEGY", "ema") != "none"
+        )
 
     def initialize(self):
         """Initialize all ML models."""
@@ -96,7 +101,7 @@ class DetectionPipeline:
         ppe_detections = detections.get("ppe_detections", {})
         violation_detections = detections.get("violation_detections", {})
         action_violations = detections.get("action_violations", [])
-        
+
         # Log detection results for debugging
         total_violations = sum(len(dets) for dets in violation_detections.values())
         total_ppe = sum(len(dets) for dets in ppe_detections.values())
@@ -119,11 +124,10 @@ class DetectionPipeline:
         persons = self.detector.associate_ppe_to_persons(
             persons, ppe_detections, violation_detections, action_violations
         )
-        
+
         # Log association results
         associated_violations = sum(
-            1 for p in persons 
-            if p.get("missing_ppe") or p.get("is_violation", False)
+            1 for p in persons if p.get("missing_ppe") or p.get("is_violation", False)
         )
         if associated_violations > 0:
             logger.info(
@@ -140,7 +144,7 @@ class DetectionPipeline:
         # 3. Process each person (persons already have track_id from YOLOv8)
         for person in persons:
             track_id = person.get("track_id")
-            
+
             # Use track_id directly as person_id
             if track_id is not None:
                 person_id = f"person_{track_id}"
@@ -153,17 +157,31 @@ class DetectionPipeline:
                 "person_id": person_id,
                 "track_id": track_id,
                 "box": person.get("box", [0, 0, 0, 0]),
+                "mask": person.get("mask"),  # SAM2 mask for visualization
                 "detected_ppe": person.get("detected_ppe", []),
                 "missing_ppe": person.get("missing_ppe", []),
                 "action_violations": person.get("action_violations", []),
                 "detection_confidence": person.get("detection_confidence", {}),
                 "ppe_detections": person.get("ppe_detections", []),
+                "is_violation": person.get("is_violation", False),
             }
 
-            # 4. Apply temporal filtering
-            filter_result = self.temporal_filter.update(
-                person_id, person_result.get("missing_ppe", [])
-            )
+            # 4. Apply temporal filtering (with confidence fusion if available)
+            detection_confidence = person_result.get("detection_confidence", {})
+
+            if self.use_confidence_fusion and detection_confidence:
+                # Use confidence-based temporal filtering with EMA fusion
+                filter_result = self.temporal_filter.update_with_confidence(
+                    person_id, detection_confidence
+                )
+                person_result["fused_confidence"] = filter_result.get(
+                    "fused_confidence", {}
+                )
+            else:
+                # Fall back to binary temporal filtering
+                filter_result = self.temporal_filter.update(
+                    person_id, person_result.get("missing_ppe", [])
+                )
 
             person_result["stable_violation"] = filter_result["is_violation"]
             person_result["stable_missing_ppe"] = filter_result["stable_missing_ppe"]
@@ -190,7 +208,10 @@ class DetectionPipeline:
                     "missing_ppe": filter_result["stable_missing_ppe"],
                     "action_violations": [av["action"] for av in action_viols],
                     "is_violation": True,
-                    "detection_confidence": person_result.get("detection_confidence", {}),
+                    "detection_confidence": person_result.get(
+                        "detection_confidence", {}
+                    ),
+                    "fused_confidence": person_result.get("fused_confidence", {}),
                 }
                 result["events"].append(event)
                 result["violations"].append(
@@ -205,11 +226,13 @@ class DetectionPipeline:
 
             result["persons"].append(person_result)
             # Also add to tracks for API compatibility
-            result["tracks"].append({
-                "track_id": track_id,
-                "person_id": person_id,
-                "box": person_result.get("box"),
-            })
+            result["tracks"].append(
+                {
+                    "track_id": track_id,
+                    "person_id": person_id,
+                    "box": person_result.get("box"),
+                }
+            )
 
         # 6. Annotate frame (include unassociated violations for visualization)
         result["annotated_frame"] = self._annotate_frame(
@@ -255,13 +278,12 @@ class DetectionPipeline:
             for ppe_type, viol_list in violation_detections.items():
                 for viol in viol_list:
                     viol_box = viol.get("box", [0, 0, 0, 0])
-                    viol_score = viol.get("score", 0.0)
                     if viol_box != [0, 0, 0, 0]:
                         x1, y1, x2, y2 = [int(c) for c in viol_box]
                         # Draw red box for violations
                         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                        # Add label with score (matching YOLOv11 direct output format like "No Head Mask 0.85")
-                        label = f"{ppe_type} {viol_score:.2f}"
+                        # Add label without confidence score for violation classes
+                        label = f"{ppe_type}"
                         cv2.putText(
                             annotated,
                             label,
@@ -273,7 +295,9 @@ class DetectionPipeline:
                         )
                         unassociated_count += 1
             if unassociated_count > 0:
-                logger.info(f"Drawing {unassociated_count} unassociated violation boxes on frame {self.frame_count}")
+                logger.info(
+                    f"Drawing {unassociated_count} unassociated violation boxes on frame {self.frame_count}"
+                )
 
         # Draw unassociated action violations
         if action_violations:
