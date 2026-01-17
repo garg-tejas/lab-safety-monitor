@@ -1,7 +1,8 @@
 """
 SAM 3 Detector for PPE Detection
 
-Uses Meta's SAM 3 model for text-prompted segmentation of PPE items.
+Uses Meta's SAM 3 model via Hugging Face Transformers for text-prompted segmentation.
+Supports Promptable Concept Segmentation (PCS) with text prompts.
 """
 
 import torch
@@ -13,8 +14,9 @@ from ..core.config import settings
 
 class SAM3Detector:
     """
-    PPE Detector using SAM 3's text-prompted segmentation.
+    PPE Detector using SAM 3's text-prompted segmentation via Hugging Face Transformers.
 
+    Uses Sam3Model and Sam3Processor for Promptable Concept Segmentation (PCS).
     Detects: safety goggles, protective helmet, face mask, lab coat
     """
 
@@ -25,29 +27,38 @@ class SAM3Detector:
         self.ppe_prompts = settings.PPE_PROMPTS
         self.confidence_threshold = settings.DETECTION_CONFIDENCE_THRESHOLD
         self._initialized = False
+        self._model_available = False
 
     def initialize(self):
-        """Lazy initialization of SAM 3 model."""
+        """Lazy initialization of SAM 3 model from Hugging Face."""
         if self._initialized:
             return
 
-        try:
-            from sam3.model_builder import build_sam3_image_model
-            from sam3.model.sam3_image_processor import Sam3Processor
+        model_id = getattr(settings, "SAM3_MODEL", "facebook/sam3")
 
-            print(f"Loading SAM 3 model on {self.device}...")
-            self.model = build_sam3_image_model()
-            self.processor = Sam3Processor(self.model)
+        try:
+            from transformers import Sam3Model, Sam3Processor
+
+            print(f"Loading SAM 3 model from Hugging Face ({model_id}) on {self.device}...")
+            self.model = Sam3Model.from_pretrained(model_id).to(self.device)
+            self.processor = Sam3Processor.from_pretrained(model_id)
+            self._model_available = True
             self._initialized = True
             print("SAM 3 model loaded successfully!")
         except ImportError as e:
-            print(f"SAM 3 not available: {e}")
+            print(f"SAM 3 (Transformers) not available: {e}")
             print("Falling back to mock detector for development")
+            self._model_available = False
+            self._initialized = True  # Use mock mode
+        except Exception as e:
+            print(f"Failed to load SAM 3 model: {e}")
+            print("Falling back to mock detector for development")
+            self._model_available = False
             self._initialized = True  # Use mock mode
 
     def detect(self, frame: np.ndarray) -> Dict[str, Any]:
         """
-        Detect PPE items in a frame.
+        Detect PPE items in a frame using text-prompted segmentation.
 
         Args:
             frame: BGR numpy array from OpenCV
@@ -61,9 +72,9 @@ class SAM3Detector:
         # Convert BGR to RGB PIL Image
         if isinstance(frame, np.ndarray):
             frame_rgb = frame[:, :, ::-1].copy()  # BGR to RGB (copy to avoid negative stride)
-            image = Image.fromarray(frame_rgb)
+            image = Image.fromarray(frame_rgb).convert("RGB")
         else:
-            image = frame
+            image = frame.convert("RGB") if hasattr(frame, "convert") else frame
 
         results = {
             "persons": [],
@@ -73,49 +84,87 @@ class SAM3Detector:
             else image.size[::-1],
         }
 
-        if self.model is None:
+        if not self._model_available:
             # Mock mode for development
             return self._mock_detect(frame)
 
         try:
-            # First detect persons
-            state = self.processor.set_image(image)
-            person_output = self.processor.set_text_prompt(state=state, prompt="person")
+            # Detect persons using text prompt
+            inputs = self.processor(images=image, text="person", return_tensors="pt").to(self.device)
 
-            person_masks = person_output.get("masks", [])
-            person_boxes = person_output.get("boxes", [])
-            person_scores = person_output.get("scores", [])
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+
+            # Post-process person results
+            person_results = self.processor.post_process_instance_segmentation(
+                outputs,
+                threshold=self.confidence_threshold,
+                mask_threshold=0.5,
+                target_sizes=inputs.get("original_sizes").tolist()
+            )[0]
+
+            person_masks = person_results.get("masks", [])
+            person_boxes = person_results.get("boxes", [])
+            person_scores = person_results.get("scores", [])
 
             # Store person detections
             for i, (mask, box, score) in enumerate(
                 zip(person_masks, person_boxes, person_scores)
             ):
                 if score >= self.confidence_threshold:
+                    # Convert mask to numpy if it's a tensor
+                    mask_np = mask.cpu().numpy() if hasattr(mask, "cpu") else mask
+                    if isinstance(mask_np, np.ndarray) and mask_np.ndim == 3:
+                        mask_np = mask_np[0]  # Remove batch dimension if present
+                    
+                    # Convert box to list if it's a tensor
+                    box_list = box.tolist() if hasattr(box, "tolist") else box
+
                     results["persons"].append(
                         {
                             "id": i,
-                            "mask": mask,
-                            "box": box.tolist() if hasattr(box, "tolist") else box,
+                            "mask": mask_np.astype(np.uint8) if isinstance(mask_np, np.ndarray) else mask_np,
+                            "box": box_list,
                             "score": float(score),
                         }
                     )
 
-            # Detect each PPE type
+            # Detect each PPE type using text prompts
             for ppe_type in self.ppe_prompts:
-                state = self.processor.set_image(image)
-                output = self.processor.set_text_prompt(state=state, prompt=ppe_type)
+                inputs = self.processor(
+                    images=image, text=ppe_type, return_tensors="pt"
+                ).to(self.device)
 
-                masks = output.get("masks", [])
-                boxes = output.get("boxes", [])
-                scores = output.get("scores", [])
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+
+                # Post-process PPE results
+                ppe_results = self.processor.post_process_instance_segmentation(
+                    outputs,
+                    threshold=self.confidence_threshold,
+                    mask_threshold=0.5,
+                    target_sizes=inputs.get("original_sizes").tolist()
+                )[0]
+
+                masks = ppe_results.get("masks", [])
+                boxes = ppe_results.get("boxes", [])
+                scores = ppe_results.get("scores", [])
 
                 detections = []
                 for mask, box, score in zip(masks, boxes, scores):
                     if score >= self.confidence_threshold:
+                        # Convert mask to numpy if it's a tensor
+                        mask_np = mask.cpu().numpy() if hasattr(mask, "cpu") else mask
+                        if isinstance(mask_np, np.ndarray) and mask_np.ndim == 3:
+                            mask_np = mask_np[0]  # Remove batch dimension if present
+                        
+                        # Convert box to list if it's a tensor
+                        box_list = box.tolist() if hasattr(box, "tolist") else box
+
                         detections.append(
                             {
-                                "mask": mask,
-                                "box": box.tolist() if hasattr(box, "tolist") else box,
+                                "mask": mask_np.astype(np.uint8) if isinstance(mask_np, np.ndarray) else mask_np,
+                                "box": box_list,
                                 "score": float(score),
                             }
                         )
@@ -124,6 +173,8 @@ class SAM3Detector:
 
         except Exception as e:
             print(f"SAM 3 detection error: {e}")
+            import traceback
+            traceback.print_exc()
             return self._mock_detect(frame)
 
         return results

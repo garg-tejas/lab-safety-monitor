@@ -2,12 +2,15 @@
 Mask Utilities
 
 Utility functions for mask operations and visualization.
-Used by the hybrid YOLO + SAM 2 pipeline.
+Used by the hybrid YOLO + SAM 2/3 pipeline.
 """
 
 import cv2
 import numpy as np
+import logging
 from typing import List, Tuple, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 # Color scheme (BGR format for OpenCV)
@@ -202,10 +205,19 @@ def draw_mask_overlay(
         Frame with mask overlay
     """
     if mask is None or mask.size == 0:
+        logger.debug("[MaskUtils] draw_mask_overlay: mask is None or empty")
         return frame
+
+    mask_pixels = int(np.sum(mask > 0))
+    logger.info(
+        f"[MaskUtils] draw_mask_overlay: mask_pixels={mask_pixels}, shape={mask.shape}, color={color}, alpha={alpha}"
+    )
 
     # Ensure mask matches frame size
     if mask.shape[:2] != frame.shape[:2]:
+        logger.info(
+            f"[MaskUtils] Resizing mask from {mask.shape[:2]} to {frame.shape[:2]}"
+        )
         mask = cv2.resize(mask.astype(np.uint8), (frame.shape[1], frame.shape[0]))
 
     # Create colored overlay
@@ -380,7 +392,16 @@ def draw_person_with_ppe(
     # Draw person mask
     person_mask = person.get("mask")
     if show_masks and person_mask is not None:
+        mask_pixels = int(np.sum(person_mask > 0))
+        logger.info(
+            f"[MaskUtils] Drawing person mask for track {track_id}: {mask_pixels} pixels, shape={person_mask.shape}"
+        )
         result = draw_mask_overlay(result, person_mask, base_color, mask_alpha)
+    else:
+        if show_masks:
+            logger.debug(
+                f"[MaskUtils] No mask for track {track_id} (show_masks={show_masks}, mask={person_mask is not None})"
+            )
 
     # Draw person box
     person_box = person.get("box", [0, 0, 100, 100])
@@ -394,7 +415,7 @@ def draw_person_with_ppe(
         ppe_box = ppe.get("box", [0, 0, 0, 0])
         ppe_mask = ppe.get("mask")
         is_violation_ppe = ppe.get("is_violation", False)
-        
+
         # Use red color for violation PPE boxes
         if is_violation_ppe:
             ppe_color = (0, 0, 255)  # Red for violations
@@ -409,7 +430,7 @@ def draw_person_with_ppe(
         px1, py1, px2, py2 = [int(c) for c in ppe_box]
         thickness = 2 if is_violation_ppe else 1
         cv2.rectangle(result, (px1, py1), (px2, py2), ppe_color, thickness)
-        
+
         # Add label for violations
         if is_violation_ppe:
             display_name = ppe.get("display_name", ppe_label)

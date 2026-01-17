@@ -1,22 +1,16 @@
 """
-SAM 3 Segmenter
+SAM 3 Segmenter (with SAM2 Video fallback)
 
-Wrapper for SAM 3 (Segment Anything Model 3) using ModelScope for model download.
-Supports both image segmentation and streaming video tracking.
+Wrapper for SAM 3 / SAM 2 Video for streaming video segmentation.
+Since SAM3 requires triton (Linux-only), we use SAM2 Video on Windows.
 
-SAM 3 improvements over SAM 2:
-- Native streaming video inference
-- Better multi-object tracking
-- Improved mask quality
-
-Model download via ModelScope (no HuggingFace auth required):
-    modelscope download --model facebook/sam3 sam3/sam3.pt
+Uses Sam2VideoModel for streaming video segmentation with box prompts.
+This provides high-quality person masks that are better than box-based fallbacks.
 """
 
 import numpy as np
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 try:
     import torch
@@ -28,227 +22,107 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def download_sam3_from_modelscope(target_path: Path) -> bool:
-    """
-    Download SAM3 model from ModelScope.
-
-    Args:
-        target_path: Path to save the sam3.pt file
-
-    Returns:
-        True if download successful, False otherwise
-    """
-    try:
-        from modelscope import snapshot_download
-    except ImportError:
-        logger.error("ModelScope not installed. Install with: pip install modelscope")
-        return False
-
-    model_id = getattr(settings, "SAM3_MODEL", "facebook/sam3")
-
-    # Ensure target directory exists
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        logger.info(f"Downloading SAM3 from ModelScope: {model_id}")
-        print(f"Downloading SAM3 from ModelScope: {model_id}...")
-
-        # Download to cache, then copy specific file
-        cache_dir = snapshot_download(
-            model_id,
-            allow_file_pattern=["sam3/sam3.pt", "sam3.pt"],
-        )
-
-        # Find the downloaded file
-        cache_path = Path(cache_dir)
-        pt_file = None
-
-        for candidate in [
-            cache_path / "sam3" / "sam3.pt",
-            cache_path / "sam3.pt",
-        ]:
-            if candidate.exists():
-                pt_file = candidate
-                break
-
-        if pt_file is None:
-            # List files in cache for debugging
-            all_files = list(cache_path.rglob("*.pt"))
-            logger.warning(f"SAM3 .pt files in cache: {all_files}")
-            if all_files:
-                pt_file = all_files[0]
-
-        if pt_file and pt_file.exists():
-            # Copy or symlink to target path
-            import shutil
-
-            shutil.copy2(pt_file, target_path)
-            logger.info(f"SAM3 model saved to: {target_path}")
-            print(f"SAM3 model saved to: {target_path}")
-            return True
-        else:
-            logger.error("Could not find sam3.pt in downloaded files")
-            return False
-
-    except Exception as e:
-        logger.error(f"Failed to download SAM3 from ModelScope: {e}")
-        print(f"Failed to download SAM3: {e}")
-        return False
-
-
 class SAM3Segmenter:
     """
-    SAM 3 wrapper with streaming video support.
+    SAM 3 / SAM 2 Video wrapper for streaming video segmentation.
 
-    Uses the sam3.pt checkpoint from ModelScope for video tracking
-    with box/point prompts.
+    Uses Sam2VideoModel from HuggingFace Transformers for box-prompted
+    segmentation. Falls back to per-frame SAM2 if video mode unavailable.
 
     Features:
     - Streaming video inference (frame-by-frame)
     - Box-prompted segmentation
     - Multi-object tracking with consistent IDs
-    - Automatic mask propagation
     """
 
     def __init__(self):
         self.model = None
-        self.predictor = None
+        self.processor = None
+        self.image_model = None
+        self.image_processor = None
         self._initialized = False
         self.device = "cuda" if self._cuda_available() else "cpu"
-        self.dtype = None  # Set during initialization
+        self.dtype = None
 
         # Video state tracking
         self._video_initialized = False
-        self._tracked_object_ids: Dict[int, int] = {}  # track_id -> sam3_obj_id
+        self._tracked_object_ids: Dict[int, int] = {}  # track_id -> sam_obj_id
         self._next_obj_id = 1
         self._frame_count = 0
-        self._inference_state: Optional[Any] = None
+        self._inference_session = None
+        self._model_available = False
+        self._image_model_available = False
+        self._model_type = "none"  # "sam2_video", "sam2_image", or "none"
 
     def _cuda_available(self) -> bool:
-        """Check if CUDA is available."""
         if torch is None:
             return False
         return torch.cuda.is_available()
 
-    def _get_model_path(self) -> Path:
-        """Get SAM3 model path, downloading if necessary."""
-        model_path = getattr(settings, "SAM3_MODEL_PATH", None)
-        if model_path is None:
-            model_path = settings.WEIGHTS_DIR / "sam3" / "sam3.pt"
-
-        if not model_path.exists():
-            logger.info(f"SAM3 model not found at {model_path}, downloading...")
-            if not download_sam3_from_modelscope(model_path):
-                raise FileNotFoundError(
-                    f"SAM3 model not found at {model_path} and download failed.\n"
-                    f"Manual download:\n"
-                    f"  pip install modelscope\n"
-                    f"  modelscope download --model facebook/sam3 sam3/sam3.pt --local_dir {model_path.parent}"
-                )
-
-        return model_path
-
     def initialize(self) -> None:
-        """Initialize SAM 3 model from local checkpoint."""
+        """Initialize SAM model from HuggingFace."""
         if self._initialized:
             return
 
         if torch is None:
-            raise ImportError(
-                "PyTorch is required for SAM3. Install with: pip install torch"
-            )
+            raise ImportError("PyTorch is required for SAM")
 
         self.dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        model_id = getattr(settings, "SAM3_MODEL_ID", "facebook/sam2.1-hiera-large")
 
-        model_path = self._get_model_path()
+        print(f"Loading SAM model from HuggingFace: {model_id}...")
+        logger.info(f"[SAM3] Loading SAM model from HuggingFace: {model_id}")
 
-        print(f"Loading SAM3 model from {model_path}...")
-        logger.info(f"Loading SAM3 model from {model_path}")
-
+        # Try SAM2 Video first (best for our use case - streaming video with boxes)
         try:
-            # Try to use SAM3's build function if available (similar to SAM2)
-            # SAM3 may have a similar structure to SAM2
+            from transformers import Sam2VideoModel, Sam2VideoProcessor
+
+            self.model = Sam2VideoModel.from_pretrained(model_id).to(
+                self.device, dtype=self.dtype
+            )
+            self.processor = Sam2VideoProcessor.from_pretrained(model_id)
+            self._model_available = True
+            self._model_type = "sam2_video"
+
+            print(f"SAM3Segmenter initialized with Sam2VideoModel on {self.device}")
+            logger.info(f"[SAM3] Initialized with Sam2VideoModel on {self.device}")
+
+            # Also load image model for per-frame segmentation in segment_boxes
             try:
-                from sam3.build_sam import build_sam3, build_sam3_video_predictor
-                from sam3.sam3_image_predictor import SAM3ImagePredictor
+                from transformers import Sam2Model, Sam2Processor
 
-                # Find config file
-                config_path = self._find_sam3_config()
-
-                self.model = build_sam3(
-                    config_file=config_path,
-                    ckpt_path=str(model_path),
-                    device=self.device,
+                self.image_model = Sam2Model.from_pretrained(model_id).to(self.device)
+                self.image_processor = Sam2Processor.from_pretrained(model_id)
+                self._image_model_available = True
+                logger.info("[SAM3] Also loaded Sam2Model for per-frame segmentation")
+            except Exception as e_img:
+                logger.warning(
+                    f"[SAM3] Could not load Sam2Model for per-frame: {e_img}"
                 )
-                self.predictor = SAM3ImagePredictor(self.model)
-
-                # Try to build video predictor
-                try:
-                    self.video_predictor = build_sam3_video_predictor(
-                        config_file=config_path,
-                        ckpt_path=str(model_path),
-                        device=self.device,
-                    )
-                    logger.info("SAM3 video predictor initialized")
-                except Exception as e:
-                    logger.warning(f"SAM3 video predictor not available: {e}")
-                    self.video_predictor = None
-
-            except ImportError:
-                # SAM3 package not installed, try loading raw checkpoint
-                logger.info("SAM3 package not found, loading raw checkpoint...")
-                self._load_raw_checkpoint(model_path)
-
-            self._initialized = True
-            print(f"SAM3Segmenter initialized on {self.device} with dtype {self.dtype}")
-            logger.info(f"SAM3Segmenter initialized on {self.device}")
 
         except Exception as e:
-            logger.error(f"Failed to load SAM3 model: {e}")
-            raise
+            logger.warning(f"[SAM3] Sam2VideoModel not available: {e}")
 
-    def _find_sam3_config(self) -> str:
-        """Find SAM3 configuration file."""
-        try:
-            import sam3
+            # Try SAM2 for per-frame segmentation
+            try:
+                from transformers import Sam2Model, Sam2Processor
 
-            sam3_dir = Path(sam3.__file__).parent
+                self.image_model = Sam2Model.from_pretrained(model_id).to(self.device)
+                self.image_processor = Sam2Processor.from_pretrained(model_id)
+                self._image_model_available = True
+                self._model_type = "sam2_image"
 
-            config_candidates = [
-                sam3_dir / "configs" / "sam3.yaml",
-                sam3_dir / "configs" / "sam3_default.yaml",
-                sam3_dir / "sam3.yaml",
-            ]
+                print(
+                    f"SAM3Segmenter initialized with Sam2Model on {self.device} (per-frame)"
+                )
+                logger.info(f"[SAM3] Initialized with Sam2Model (per-frame mode)")
 
-            for config in config_candidates:
-                if config.exists():
-                    return str(config)
+            except Exception as e2:
+                logger.warning(f"[SAM3] Sam2Model also not available: {e2}")
+                self._model_type = "none"
+                print("SAM models not available - will use box-based fallback masks")
 
-            # Return default config name for Hydra
-            return "sam3.yaml"
-
-        except ImportError:
-            return "sam3.yaml"
-
-    def _load_raw_checkpoint(self, model_path: Path) -> None:
-        """Load SAM3 from raw checkpoint without build functions."""
-        # Load the checkpoint
-        checkpoint = torch.load(
-            str(model_path),
-            map_location=self.device,
-            weights_only=False,
-        )
-
-        # Store checkpoint for later use - actual model structure depends on SAM3 format
-        self._raw_checkpoint = checkpoint
-        self.model = checkpoint.get("model", checkpoint)
-
-        if isinstance(self.model, torch.nn.Module):
-            self.model = self.model.to(self.device)
-            self.model.eval()
-
-        logger.info("Loaded SAM3 raw checkpoint (limited functionality)")
-        print("SAM3 loaded from raw checkpoint - some features may be limited")
+        self._initialized = True
 
     def segment_boxes(
         self,
@@ -257,7 +131,7 @@ class SAM3Segmenter:
         labels: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Segment objects using box prompts.
+        Segment objects using box prompts (per-frame).
 
         Args:
             frame: BGR numpy array from OpenCV
@@ -276,44 +150,139 @@ class SAM3Segmenter:
         if labels is None:
             labels = [f"object_{i}" for i in range(len(boxes))]
 
-        # Convert BGR to RGB
-        frame_rgb = frame[:, :, ::-1].copy()
-
+        h, w = frame.shape[:2]
         results = []
 
+        logger.info(
+            f"[SAM3] segment_boxes: {len(boxes)} boxes, model_type={self._model_type}"
+        )
+
+        if self._model_type == "none":
+            # Fallback: return box-based masks
+            logger.info("[SAM3] Using box-based fallback masks (no SAM model)")
+            for box, label in zip(boxes, labels):
+                mask = self._box_to_mask(box, h, w)
+                mask_pixels = int(np.sum(mask > 0))
+                logger.debug(
+                    f"[SAM3] Fallback box mask for {label}: {mask_pixels} pixels"
+                )
+                results.append(
+                    {
+                        "mask": mask,
+                        "box": box,
+                        "label": label,
+                        "score": 0.5,
+                        "density": 1.0,
+                        "valid": True,
+                        "source": "box_fallback",
+                    }
+                )
+            return results
+
         try:
-            if hasattr(self, "predictor") and self.predictor is not None:
-                # Use SAM3ImagePredictor
-                self.predictor.set_image(frame_rgb)
+            from PIL import Image
 
+            # Convert BGR to RGB
+            frame_rgb = frame[:, :, ::-1].copy()
+            pil_image = Image.fromarray(frame_rgb)
+
+            # Use image model for per-frame segmentation
+            if self._image_model_available and self.image_model is not None:
                 for box, label in zip(boxes, labels):
-                    box_np = np.array(box, dtype=np.float32)
+                    try:
+                        # Format box for Sam2Processor: [[x1, y1, x2, y2]]
+                        # Sam2Processor expects 3 levels: [image_level, boxes_for_image, box_coords]
+                        input_boxes = [[box]]
 
-                    masks, scores, _ = self.predictor.predict(
-                        box=box_np,
-                        multimask_output=True,
-                    )
+                        inputs = self.image_processor(
+                            images=pil_image,
+                            input_boxes=input_boxes,
+                            return_tensors="pt",
+                        ).to(self.device)
 
-                    best_idx = np.argmax(scores)
-                    mask = masks[best_idx]
-                    score = float(scores[best_idx])
+                        with torch.no_grad():
+                            outputs = self.image_model(**inputs)
 
-                    density = self._calculate_mask_density(mask, box)
-                    density_threshold = getattr(settings, "MASK_DENSITY_THRESHOLD", 0.1)
 
-                    results.append(
-                        {
-                            "mask": mask.astype(np.uint8),
-                            "box": box,
-                            "label": label,
-                            "score": score,
-                            "density": density,
-                            "valid": density >= density_threshold,
-                        }
-                    )
+                        # Get masks - outputs.pred_masks shape: [batch, num_masks, H, W]
+                        pred_masks = outputs.pred_masks
+
+                        # Post-process to original size
+                        masks = self.image_processor.post_process_masks(
+                            pred_masks.cpu(), inputs["original_sizes"], binarize=True
+                        )[0]
+
+                        # masks shape: [num_masks, H, W] after post_process_masks[0]
+                        if masks.shape[0] > 0:
+                            # Get best mask (first one, or use iou_scores if available)
+                            if (
+                                hasattr(outputs, "iou_scores")
+                                and outputs.iou_scores is not None
+                                and outputs.iou_scores.numel() > 0
+                            ):
+                                # iou_scores shape: [batch, num_masks] or [num_masks]
+                                iou_scores = outputs.iou_scores
+                                if iou_scores.ndim > 1:
+                                    iou_scores = iou_scores[0]  # Get first batch
+                                
+                                # Get best scoring mask
+                                if iou_scores.numel() > 1:
+                                    best_idx = iou_scores.argmax().item()
+                                else:
+                                    best_idx = 0
+                                
+                                # Ensure index is within bounds
+                                best_idx = min(best_idx, masks.shape[0] - 1)
+                                mask = masks[best_idx].numpy().astype(np.uint8)
+                                score = float(iou_scores[best_idx].cpu())
+                            else:
+                                # No iou_scores, use first mask
+                                mask = masks[0].numpy().astype(np.uint8)
+                                score = 0.9
+                        else:
+                            mask = self._box_to_mask(box, h, w)
+                            score = 0.5
+
+
+                        density = self._calculate_mask_density(mask, box)
+                        density_threshold = getattr(
+                            settings, "MASK_DENSITY_THRESHOLD", 0.1
+                        )
+                        mask_pixels = int(np.sum(mask > 0))
+
+                        logger.info(
+                            f"[SAM3] SAM2 mask for {label}: {mask_pixels} pixels, density={density:.2f}, score={score:.2f}"
+                        )
+
+                        results.append(
+                            {
+                                "mask": mask,
+                                "box": box,
+                                "label": label,
+                                "score": score,
+                                "density": density,
+                                "valid": density >= density_threshold,
+                                "source": "sam2_image",
+                            }
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[SAM3] SAM2 segmentation failed for {label}: {e}"
+                        )
+                        mask = self._box_to_mask(box, h, w)
+                        results.append(
+                            {
+                                "mask": mask,
+                                "box": box,
+                                "label": label,
+                                "score": 0.0,
+                                "density": 1.0,
+                                "valid": False,
+                                "source": "box_fallback_error",
+                            }
+                        )
             else:
-                # Fallback: return box-based masks
-                h, w = frame.shape[:2]
+                # Fallback to box masks
                 for box, label in zip(boxes, labels):
                     mask = self._box_to_mask(box, h, w)
                     results.append(
@@ -324,13 +293,12 @@ class SAM3Segmenter:
                             "score": 0.5,
                             "density": 1.0,
                             "valid": True,
+                            "source": "box_fallback",
                         }
                     )
 
         except Exception as e:
-            logger.warning(f"SAM3 segmentation failed: {e}")
-            # Fallback to box masks
-            h, w = frame.shape[:2]
+            logger.warning(f"[SAM3] Per-frame segmentation failed: {e}")
             for box, label in zip(boxes, labels):
                 mask = self._box_to_mask(box, h, w)
                 results.append(
@@ -341,6 +309,7 @@ class SAM3Segmenter:
                         "score": 0.0,
                         "density": 1.0,
                         "valid": False,
+                        "source": "box_fallback_error",
                     }
                 )
 
@@ -358,7 +327,6 @@ class SAM3Segmenter:
     def _calculate_mask_density(self, mask: np.ndarray, box: List[float]) -> float:
         """Calculate mask density within bounding box."""
         x1, y1, x2, y2 = [int(c) for c in box]
-
         h, w = mask.shape[:2]
         x1, x2 = max(0, x1), min(w, x2)
         y1, y2 = max(0, y1), min(h, y2)
@@ -372,16 +340,10 @@ class SAM3Segmenter:
 
         mask_region = mask[y1:y2, x1:x2]
         mask_pixels = np.sum(mask_region > 0)
-
         return float(mask_pixels) / float(box_area)
 
     def init_video_session(self, frame: Optional[np.ndarray] = None) -> None:
-        """
-        Initialize a streaming video session.
-
-        Args:
-            frame: Optional first frame to initialize with
-        """
+        """Initialize a streaming video session."""
         if not self._initialized:
             self.initialize()
 
@@ -389,25 +351,23 @@ class SAM3Segmenter:
         self._tracked_object_ids = {}
         self._next_obj_id = 1
         self._frame_count = 0
+        self._inference_session = None
 
-        if hasattr(self, "video_predictor") and self.video_predictor is not None:
+        logger.info(f"[SAM3] init_video_session: model_type={self._model_type}")
+
+        if self._model_type == "sam2_video" and self._model_available:
             try:
-                if frame is not None:
-                    frame_rgb = frame[:, :, ::-1].copy()
-                    self._inference_state = self.video_predictor.init_state(frame_rgb)
-                else:
-                    self._inference_state = None
-
-                self._video_initialized = True
-                logger.info("SAM3 streaming video session initialized")
+                # Initialize streaming session for Sam2VideoModel
+                self._inference_session = self.processor.init_video_session(
+                    inference_device=self.device,
+                    dtype=self.dtype,
+                )
+                logger.info("[SAM3] Sam2VideoModel streaming session initialized")
             except Exception as e:
-                logger.warning(f"Failed to init SAM3 video session: {e}")
-                self._video_initialized = False
-        else:
-            # Video predictor not available, mark as initialized anyway
-            # We'll fall back to per-frame segmentation
-            self._video_initialized = True
-            logger.info("SAM3 video session initialized (per-frame mode)")
+                logger.warning(f"[SAM3] Failed to init video session: {e}")
+                self._inference_session = None
+
+        self._video_initialized = True
 
     def process_frame(
         self,
@@ -416,11 +376,6 @@ class SAM3Segmenter:
     ) -> Dict[int, np.ndarray]:
         """
         Process a single frame with optional new detections.
-
-        Args:
-            frame: BGR numpy array from OpenCV
-            detections: Optional list of new detections to track
-                Each detection should have 'track_id' and 'box' keys
 
         Returns:
             Dict mapping track_id -> binary mask
@@ -431,33 +386,40 @@ class SAM3Segmenter:
         if not self._video_initialized:
             self.init_video_session(frame)
 
-        result = {}
+        self._frame_count += 1
 
-        # If we have a proper video predictor, use it
-        if (
-            hasattr(self, "video_predictor")
-            and self.video_predictor is not None
-            and self._inference_state is not None
-        ):
+        num_dets = len(detections) if detections else 0
+        logger.info(
+            f"[SAM3] process_frame #{self._frame_count}: {num_dets} detections, model_type={self._model_type}"
+        )
+
+        # Try streaming video mode first
+        if self._model_type == "sam2_video" and self._inference_session is not None:
             try:
-                result = self._process_frame_video(frame, detections)
+                return self._process_frame_streaming(frame, detections)
             except Exception as e:
-                logger.warning(f"Video processing failed, using per-frame: {e}")
-                result = self._process_frame_single(frame, detections)
+                logger.warning(f"[SAM3] Streaming failed: {e}, using per-frame")
+                return self._process_frame_single(frame, detections)
         else:
             # Fall back to per-frame segmentation
-            result = self._process_frame_single(frame, detections)
+            return self._process_frame_single(frame, detections)
 
-        self._frame_count += 1
-        return result
-
-    def _process_frame_video(
+    def _process_frame_streaming(
         self,
         frame: np.ndarray,
         detections: Optional[List[Dict[str, Any]]],
     ) -> Dict[int, np.ndarray]:
-        """Process frame using video predictor."""
+        """Process frame using Sam2VideoModel streaming inference."""
+        from PIL import Image
+
         frame_rgb = frame[:, :, ::-1].copy()
+        pil_image = Image.fromarray(frame_rgb)
+        h, w = frame.shape[:2]
+
+        # Process frame through processor
+        inputs = self.processor(
+            images=pil_image, device=self.device, return_tensors="pt"
+        )
 
         # Add new objects if provided
         if detections:
@@ -467,47 +429,90 @@ class SAM3Segmenter:
 
                 if track_id is not None and box is not None:
                     if track_id not in self._tracked_object_ids:
-                        self._add_object_video(box, track_id)
+                        self._add_object_streaming(
+                            box, track_id, inputs.original_sizes[0]
+                        )
 
-        # Propagate to this frame
-        out_obj_ids, out_mask_logits = self.video_predictor.propagate_in_video(
-            inference_state=self._inference_state,
-            frame_idx=self._frame_count,
-            image=frame_rgb,
-        )
+        # Run model in streaming mode
+        # Only run streaming if we have tracked objects, otherwise conditioning fails
+        if not self._tracked_object_ids:
+            logger.debug("[SAM3] No tracked objects, using per-frame segmentation")
+            return self._process_frame_single(frame, detections)
+        
+        try:
+            model_outputs = self.model(
+                inference_session=self._inference_session,
+                frame=inputs.pixel_values[0],
+                reverse=False,
+            )
 
-        # Map back to track IDs
-        result = {}
-        obj_id_to_track = {v: k for k, v in self._tracked_object_ids.items()}
+            # Post-process outputs
+            masks_tensor = self.processor.post_process_masks(
+                [model_outputs.pred_masks],
+                original_sizes=inputs.original_sizes,
+                binarize=True,
+            )[0]
 
-        for obj_id, mask_logits in zip(out_obj_ids, out_mask_logits):
-            track_id = obj_id_to_track.get(int(obj_id))
-            if track_id is not None:
-                mask = (mask_logits > 0).cpu().numpy().astype(np.uint8)
-                if mask.ndim == 3:
-                    mask = mask[0]
-                result[track_id] = mask
+            # Map back to track IDs
+            result = {}
+            obj_id_to_track = {v: k for k, v in self._tracked_object_ids.items()}
 
-        return result
+            # Get object IDs from session
+            if hasattr(self._inference_session, "obj_ids"):
+                obj_ids = self._inference_session.obj_ids
+            else:
+                obj_ids = list(range(masks_tensor.shape[0]))
 
-    def _add_object_video(self, box: List[float], track_id: int) -> None:
-        """Add object to video tracking."""
+            for i, obj_id in enumerate(obj_ids):
+                track_id = obj_id_to_track.get(int(obj_id))
+                if track_id is not None and i < masks_tensor.shape[0]:
+                    mask = masks_tensor[i].cpu().numpy().astype(np.uint8)
+                    if mask.ndim == 3:
+                        mask = mask[0]
+                    result[track_id] = mask
+                    mask_pixels = int(np.sum(mask > 0))
+                    logger.info(
+                        f"[SAM3] Streaming mask for track {track_id}: {mask_pixels} pixels"
+                    )
+
+            logger.info(f"[SAM3] Streaming produced {len(result)} masks")
+            return result
+
+        except Exception as e:
+            # Common error: "maskmem_features in conditioning outputs cannot be empty"
+            # This happens when streaming with no valid conditionings - fall back to per-frame
+            error_str = str(e)
+            if "maskmem_features" in error_str or "conditioning" in error_str.lower():
+                logger.info(f"[SAM3] Streaming conditioning issue, using per-frame: {e}")
+            else:
+                logger.warning(f"[SAM3] Streaming inference error: {e}")
+            return self._process_frame_single(frame, detections)
+
+    def _add_object_streaming(
+        self, box: List[float], track_id: int, original_size
+    ) -> None:
+        """Add object to streaming video tracking."""
         obj_id = self._next_obj_id
         self._next_obj_id += 1
         self._tracked_object_ids[track_id] = obj_id
 
-        box_np = np.array(box, dtype=np.float32)
-
         try:
-            self.video_predictor.add_new_points_or_box(
-                inference_state=self._inference_state,
-                frame_idx=self._frame_count,
-                obj_id=obj_id,
-                box=box_np,
+            # Format box for add_inputs_to_inference_session
+            # Sam2VideoProcessor expects input_boxes as [[[x1, y1, x2, y2]]]
+            input_boxes = [[[box[0], box[1], box[2], box[3]]]]
+
+            self.processor.add_inputs_to_inference_session(
+                inference_session=self._inference_session,
+                frame_idx=self._frame_count - 1,
+                obj_ids=obj_id,
+                input_boxes=input_boxes,
+                original_size=original_size,
             )
-            logger.debug(f"Added track {track_id} as SAM3 object {obj_id}")
+            logger.info(
+                f"[SAM3] Added track {track_id} as SAM object {obj_id}, box={box}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to add object {track_id}: {e}")
+            logger.warning(f"[SAM3] Failed to add object {track_id}: {e}")
             del self._tracked_object_ids[track_id]
 
     def _process_frame_single(
@@ -515,13 +520,12 @@ class SAM3Segmenter:
         frame: np.ndarray,
         detections: Optional[List[Dict[str, Any]]],
     ) -> Dict[int, np.ndarray]:
-        """Process frame using per-frame segmentation."""
+        """Process frame using per-frame segmentation (fallback)."""
         if not detections:
+            logger.debug("[SAM3] No detections for per-frame processing")
             return {}
 
         result = {}
-
-        # Extract boxes and track_ids
         boxes = []
         track_ids = []
 
@@ -537,14 +541,20 @@ class SAM3Segmenter:
             for track_id, seg in zip(track_ids, seg_results):
                 if seg.get("mask") is not None:
                     result[track_id] = seg["mask"]
+                    mask_pixels = int(np.sum(seg["mask"] > 0))
+                    source = seg.get("source", "unknown")
+                    logger.info(
+                        f"[SAM3] Per-frame mask for track {track_id}: {mask_pixels} pixels, source={source}"
+                    )
 
+        logger.info(f"[SAM3] Per-frame produced {len(result)} masks")
         return result
 
     def remove_object(self, track_id: int) -> None:
         """Remove an object from tracking."""
         if track_id in self._tracked_object_ids:
             del self._tracked_object_ids[track_id]
-            logger.debug(f"Removed track {track_id} from SAM3 tracking")
+            logger.debug(f"[SAM3] Removed track {track_id} from tracking")
 
     def reset_video_state(self) -> None:
         """Reset video tracking state for a new video."""
@@ -552,9 +562,8 @@ class SAM3Segmenter:
         self._tracked_object_ids = {}
         self._next_obj_id = 1
         self._frame_count = 0
-        self._inference_state = None
-
-        logger.info("SAM3 video state reset")
+        self._inference_session = None
+        logger.info("[SAM3] Video state reset")
 
     def is_tracking(self, track_id: int) -> bool:
         """Check if a track is being tracked."""
@@ -567,7 +576,7 @@ class SAM3Segmenter:
     def __repr__(self) -> str:
         return (
             f"SAM3Segmenter(initialized={self._initialized}, "
-            f"device={self.device}, "
+            f"device={self.device}, model_type={self._model_type}, "
             f"video_initialized={self._video_initialized}, "
             f"tracked_objects={len(self._tracked_object_ids)})"
         )

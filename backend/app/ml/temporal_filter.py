@@ -41,6 +41,7 @@ class TemporalFilter:
         self,
         buffer_size: int = 3,
         min_frames_for_violation: int = 2,
+        min_frames_for_clear: int = 3,
         fusion_strategy: str = "ema",
         ema_alpha: float = 0.7,
         confidence_threshold: float = 0.4,
@@ -49,12 +50,14 @@ class TemporalFilter:
         Args:
             buffer_size: Number of frames to keep in history
             min_frames_for_violation: Minimum consecutive frames with violation to trigger
+            min_frames_for_clear: Minimum consecutive frames without violation to clear (hysteresis)
             fusion_strategy: One of "ema", "mean", "max"
             ema_alpha: Weight for most recent frame in EMA (higher = more weight to recent)
             confidence_threshold: Minimum fused confidence to consider as violation
         """
         self.buffer_size = buffer_size
         self.min_frames = min_frames_for_violation
+        self.min_frames_clear = min_frames_for_clear
         self.fusion_strategy = fusion_strategy
         self.ema_alpha = ema_alpha
         self.confidence_threshold = confidence_threshold
@@ -74,6 +77,9 @@ class TemporalFilter:
 
         # Track active violations
         self.active_violations: Dict[str, ViolationState] = {}
+        
+        # Track consecutive frames without violation for hysteresis
+        self.clear_counter: Dict[str, int] = defaultdict(int)
 
     def update(self, person_id: str, missing_ppe: List[str]) -> Dict[str, Any]:
         """
@@ -113,6 +119,9 @@ class TemporalFilter:
         now = datetime.now()
 
         if stable_missing:
+            # Reset clear counter when violation is present
+            self.clear_counter[person_id] = 0
+            
             # Update or create violation state
             if person_id in self.active_violations:
                 state = self.active_violations[person_id]
@@ -133,10 +142,26 @@ class TemporalFilter:
                 "violation_duration": self.active_violations[person_id].frame_count,
             }
         else:
-            # Clear violation if it existed
+            # Increment clear counter
+            self.clear_counter[person_id] += 1
+            
+            # Hysteresis: only clear violation after min_frames_clear without violation
             if person_id in self.active_violations:
-                logger.debug(f"Temporal filter: clearing violation for {person_id}")
-                del self.active_violations[person_id]
+                if self.clear_counter[person_id] < self.min_frames_clear:
+                    # Still in hysteresis period - maintain violation
+                    logger.debug(
+                        f"Temporal filter: hysteresis for {person_id} "
+                        f"({self.clear_counter[person_id]}/{self.min_frames_clear} frames)"
+                    )
+                    return {
+                        "is_violation": True,
+                        "stable_missing_ppe": list(self.active_violations[person_id].missing_ppe),
+                        "violation_duration": self.active_violations[person_id].frame_count,
+                    }
+                else:
+                    # Clear violation after hysteresis period
+                    logger.debug(f"Temporal filter: clearing violation for {person_id}")
+                    del self.active_violations[person_id]
 
             return {
                 "is_violation": False,
@@ -196,6 +221,9 @@ class TemporalFilter:
         now = datetime.now()
 
         if stable_missing:
+            # Reset clear counter when violation is present
+            self.clear_counter[person_id] = 0
+            
             # Update or create violation state
             if person_id in self.active_violations:
                 state = self.active_violations[person_id]
@@ -217,12 +245,29 @@ class TemporalFilter:
                 "violation_duration": self.active_violations[person_id].frame_count,
             }
         else:
-            # Clear violation if it existed
+            # Increment clear counter
+            self.clear_counter[person_id] += 1
+            
+            # Hysteresis: only clear violation after min_frames_clear without violation
             if person_id in self.active_violations:
-                logger.debug(
-                    f"Temporal filter: clearing confidence-based violation for {person_id}"
-                )
-                del self.active_violations[person_id]
+                if self.clear_counter[person_id] < self.min_frames_clear:
+                    # Still in hysteresis period - maintain violation
+                    logger.debug(
+                        f"Temporal filter: confidence hysteresis for {person_id} "
+                        f"({self.clear_counter[person_id]}/{self.min_frames_clear} frames)"
+                    )
+                    return {
+                        "is_violation": True,
+                        "stable_missing_ppe": list(self.active_violations[person_id].missing_ppe),
+                        "fused_confidence": fused,
+                        "violation_duration": self.active_violations[person_id].frame_count,
+                    }
+                else:
+                    # Clear violation after hysteresis period
+                    logger.debug(
+                        f"Temporal filter: clearing confidence-based violation for {person_id}"
+                    )
+                    del self.active_violations[person_id]
 
             return {
                 "is_violation": False,
@@ -292,6 +337,8 @@ class TemporalFilter:
             del self.fused_confidence[person_id]
         if person_id in self.active_violations:
             del self.active_violations[person_id]
+        if person_id in self.clear_counter:
+            del self.clear_counter[person_id]
 
     def clear_all(self):
         """Clear all history."""
@@ -299,6 +346,7 @@ class TemporalFilter:
         self.confidence_history.clear()
         self.fused_confidence.clear()
         self.active_violations.clear()
+        self.clear_counter.clear()
 
 
 # Singleton instance
@@ -314,6 +362,9 @@ def get_temporal_filter() -> TemporalFilter:
             buffer_size=settings.TEMPORAL_BUFFER_SIZE,
             min_frames_for_violation=getattr(
                 settings, "TEMPORAL_VIOLATION_MIN_FRAMES", 2
+            ),
+            min_frames_for_clear=getattr(
+                settings, "TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR", 3
             ),
             fusion_strategy=getattr(settings, "TEMPORAL_FUSION_STRATEGY", "ema"),
             ema_alpha=getattr(settings, "TEMPORAL_EMA_ALPHA", 0.7),

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
 
     # SAM3 settings
     SAM3_MODEL: str = "facebook/sam3"
+    SAM3_MODEL_ID: str = (
+        "facebook/sam2.1-hiera-tiny"  # HuggingFace model for transformers
+    )
     SAM3_MODEL_PATH: Optional[Path] = None
     USE_SAM3: bool = Field(default=True)
 
@@ -55,6 +58,7 @@ class Settings(BaseSettings):
     FRAME_SAMPLE_RATE: int = 10
     TEMPORAL_BUFFER_SIZE: int = 3
     TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
+    TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR: int = 3  # Frames without violation to clear (hysteresis)
     TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
     TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)

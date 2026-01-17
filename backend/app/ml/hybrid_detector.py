@@ -140,8 +140,15 @@ class HybridDetector:
         if not persons:
             return persons
 
+        logger.info(
+            f"[HybridDetector] _add_masks_sam3 called with {len(persons)} persons"
+        )
+
         try:
             masks = self.sam3_segmenter.process_frame(frame, persons)
+            logger.info(f"[HybridDetector] SAM3 returned {len(masks)} masks")
+
+            masks_assigned = 0
             for person in persons:
                 track_id = person.get("track_id")
                 if track_id is not None and track_id in masks:
@@ -151,8 +158,20 @@ class HybridDetector:
                     if mask.ndim == 3:
                         mask = mask[0] if mask.shape[0] == 1 else mask[:, :, 0]
                     person["mask"] = mask
+                    masks_assigned += 1
+                    mask_pixels = int(np.sum(mask > 0))
+                    logger.info(
+                        f"[HybridDetector] Assigned mask to track {track_id}: {mask_pixels} pixels, shape={mask.shape}"
+                    )
+                else:
+                    logger.debug(f"[HybridDetector] No mask for track {track_id}")
+
+            logger.info(
+                f"[HybridDetector] Assigned {masks_assigned}/{len(persons)} masks from SAM3"
+            )
+
         except Exception as e:
-            logger.debug(f"SAM3 mask generation failed: {e}")
+            logger.warning(f"[HybridDetector] SAM3 mask generation failed: {e}")
 
         return persons
 

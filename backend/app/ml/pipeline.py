@@ -190,6 +190,32 @@ class DetectionPipeline:
         annotated = frame.copy()
         num_violations = sum(1 for p in persons if p.get("stable_violation", False))
 
+        # Log mask status for each person
+        persons_with_masks = sum(1 for p in persons if p.get("mask") is not None)
+        logger.info(
+            f"[Pipeline] _annotate_frame: {len(persons)} persons, {persons_with_masks} with masks, show_masks={self.show_masks}"
+        )
+
+        for person in persons:
+            track_id = person.get("track_id", "?")
+            has_mask = person.get("mask") is not None
+            if has_mask:
+                mask_pixels = int(np.sum(person["mask"] > 0))
+                logger.info(
+                    f"[Pipeline] Person track {track_id}: mask={mask_pixels} pixels"
+                )
+            else:
+                logger.debug(f"[Pipeline] Person track {track_id}: no mask")
+
+            ppe_detections = person.get("ppe_detections", [])
+            annotated = draw_person_with_ppe(
+                annotated,
+                person,
+                ppe_detections,
+                show_masks=self.show_masks,
+                mask_alpha=self.mask_alpha,
+            )
+
         for person in persons:
             ppe_detections = person.get("ppe_detections", [])
             annotated = draw_person_with_ppe(

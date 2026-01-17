@@ -79,14 +79,20 @@ class DeduplicationManager:
 
         # Case 4: Active violation and still has violations
         if active and current_missing:
-            # Check if the missing PPE has changed
-            if current_missing != active.missing_ppe:
-                # Violation type changed - end old, create new
+            # Treat as same violation if one is subset of the other
+            # This handles temporary occlusions (e.g., hand over face drops face_mask)
+            is_subset = current_missing.issubset(active.missing_ppe)
+            is_superset = current_missing.issuperset(active.missing_ppe)
+            
+            if not (is_subset or is_superset or current_missing == active.missing_ppe):
+                # Completely different violation type - end old, create new
                 ended_event_id = active.event_id
                 del self.active_violations[key]
                 return True, ended_event_id, "changed"
             else:
-                # Same violation continuing - just update last_frame
+                # PPE is subset/superset/equal - consider it the same violation
+                # Update stored PPE to the union (tracks all violations seen)
+                active.missing_ppe = active.missing_ppe.union(current_missing)
                 active.last_frame = frame_number
                 return False, None, "continuing"
 

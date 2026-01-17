@@ -30,9 +30,11 @@ dependencies = [
     "ultralytics>=8.3.0",  # YOLOv8
     "insightface>=0.7.3",  # Face recognition
     "huggingface-hub>=0.26.0",
-    "transformers>=4.47.0",
+    "transformers>=4.47.0",  # SAM3 support may require 4.57.0+ (check Hugging Face docs)
     "accelerate>=1.12.0",
     "modelscope>=1.18.0",  # For downloading SAM3 model
+    "sam3>=0.1.2",
+    "hf-xet>=1.2.0",
 ]
 
 [project.optional-dependencies]
