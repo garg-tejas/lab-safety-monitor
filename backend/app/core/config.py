@@ -1,3 +1,5 @@
+"""Application settings with environment variable support."""
+
 from pydantic_settings import BaseSettings
 from pydantic import Field, model_validator
 from pathlib import Path
@@ -20,94 +22,71 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./marketwise.db"
 
-    # ML Settings
-    SAM3_MODEL: str = "facebook/sam3"
-    USE_SAM3: bool = Field(default=True)  # Use SAM3 instead of SAM2
+    # Detector settings
+    DETECTOR_TYPE: str = Field(default="hybrid")
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
     VIOLATION_CONFIDENCE_THRESHOLD: float = 0.3
     FACE_RECOGNITION_THRESHOLD: float = 0.6
 
-    DETECTOR_TYPE: str = Field(default="hybrid")
+    # SAM3 settings
+    SAM3_MODEL: str = "facebook/sam3"
+    SAM3_MODEL_PATH: Optional[Path] = None
+    USE_SAM3: bool = Field(default=True)
 
+    # SAM2 settings (fallback)
     SAM2_MODEL_TYPE: str = Field(default="sam2.1_hiera_base_plus")
     SAM2_MODEL_PATH: Optional[Path] = None
     USE_SAM2: bool = Field(default=True)
     USE_SAM2_VIDEO_PROPAGATION: bool = Field(default=True)
+    SAM2_PROPAGATE_INTERVAL: int = Field(default=2)
+    SAM2_SEGMENT_PPE: bool = Field(default=True)
 
+    # Mask settings
     MASK_DENSITY_THRESHOLD: float = Field(default=0.1)
     MASK_CONTAINMENT_THRESHOLD: float = Field(default=0.5)
-
     SHOW_MASKS: bool = Field(default=True)
     MASK_ALPHA: float = Field(default=0.4)
 
+    # Mock mode
     USE_MOCK_DETECTOR: bool = False
     USE_MOCK_FACE: bool = False
 
+    # Temporal filtering
     FRAME_SAMPLE_RATE: int = 10
     TEMPORAL_BUFFER_SIZE: int = 3
     TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
+    TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
+    TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
+    TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)
 
-    # SAM2 propagation settings
-    SAM2_PROPAGATE_INTERVAL: int = Field(default=2)  # Propagate every N frames
-    SAM2_SEGMENT_PPE: bool = Field(default=True)  # Also segment PPE items
+    # Multi-scale detection
+    MULTI_SCALE_ENABLED: bool = Field(default=True)
+    MULTI_SCALE_FACTORS: List[float] = Field(default=[1.0, 1.5, 2.0])
+    MULTI_SCALE_NMS_THRESHOLD: float = Field(default=0.5)
 
-    # Confidence fusion settings
-    TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")  # "mean", "ema", "max"
-    TEMPORAL_EMA_ALPHA: float = Field(default=0.7)  # Weight for most recent frame (EMA)
-    TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)  # Threshold after fusion
-
-    # Multi-scale detection settings (improves small object detection like goggles)
-    MULTI_SCALE_ENABLED: bool = Field(default=True)  # Enable multi-scale detection
-    MULTI_SCALE_FACTORS: List[float] = Field(default=[1.0, 1.5, 2.0])  # Scale factors
-    MULTI_SCALE_NMS_THRESHOLD: float = Field(
-        default=0.5
-    )  # NMS IoU threshold for merging
-
+    # PPE configuration
     PPE_PROMPTS: List[str] = Field(
-        default=[
-            "safety goggles",
-            "face mask",
-            "lab coat",
-            "gloves",
-            "head mask",
-        ]
+        default=["safety goggles", "face mask", "lab coat", "gloves", "head mask"]
     )
-
-    REQUIRED_PPE: List[str] = Field(
-        default=[
-            "safety goggles",
-            "face mask",
-            "lab coat",
-        ]
-    )
+    REQUIRED_PPE: List[str] = Field(default=["safety goggles", "face mask", "lab coat"])
 
     PPE_CLASS_MAP: Dict[str, str] = Field(
         default={
             "Googles": "safety goggles",
             "Mask": "face mask",
             "Lab Coat": "lab coat",
-            "Head Mask": "head mask",  # Align with yolov11_detector.py CLASS_MAPPING
+            "Head Mask": "head mask",
             "Gloves": "gloves",
         }
     )
 
     VIOLATION_CLASSES: List[str] = Field(
-        default=[
-            "No Gloves",
-            "No googles",
-            "No Head Mask",
-            "No Lab coat",
-            "No Mask",
-        ]
+        default=["No Gloves", "No googles", "No Head Mask", "No Lab coat", "No Mask"]
     )
 
-    ACTION_VIOLATION_CLASSES: List[str] = Field(
-        default=[
-            "Drinking",
-            "Eating",
-        ]
-    )
+    ACTION_VIOLATION_CLASSES: List[str] = Field(default=["Drinking", "Eating"])
 
+    # Paths
     BASE_DIR: Path = Path(__file__).parent.parent.parent
     WEIGHTS_DIR: Optional[Path] = None
     DATA_DIR: Optional[Path] = None
@@ -142,27 +121,22 @@ class Settings(BaseSettings):
                 self.WEIGHTS_DIR / "sam2" / "sam2.1_hiera_base_plus.pt",
             )
 
-        # Prefer PyTorch over ONNX for better compatibility with ultralytics
-        onnx_path = self.WEIGHTS_DIR / "ppe_detector" / "best.onnx"
-        pt_path = self.WEIGHTS_DIR / "ppe_detector" / "best.pt"
-        logger = __import__("logging").getLogger(__name__)
+        if self.SAM3_MODEL_PATH is None:
+            object.__setattr__(
+                self, "SAM3_MODEL_PATH", self.WEIGHTS_DIR / "sam3" / "sam3.pt"
+            )
 
-        if pt_path.exists():
-            object.__setattr__(self, "YOLOV11_MODEL_PATH", pt_path)
-            logger.info(f"✓ Selected PyTorch model: {pt_path.absolute()}")
-        elif onnx_path.exists():
-            object.__setattr__(self, "YOLOV11_MODEL_PATH", onnx_path)
-            logger.warning(
-                f"⚠️ Selected ONNX model (PyTorch not found): {onnx_path.absolute()}"
-            )
-            logger.warning(
-                "⚠️ ONNX parsing may have issues - consider using PyTorch (.pt) model"
-            )
-        elif self.YOLOV11_MODEL_PATH is None:
-            object.__setattr__(self, "YOLOV11_MODEL_PATH", pt_path)
-            logger.warning(
-                f"⚠️ YOLOv11 model not found at expected paths. Defaulting to: {pt_path.absolute()}"
-            )
+        # Set YOLOv11 model path (prefer .pt over .onnx)
+        if self.YOLOV11_MODEL_PATH is None:
+            pt_path = self.WEIGHTS_DIR / "ppe_detector" / "best.pt"
+            onnx_path = self.WEIGHTS_DIR / "ppe_detector" / "best.onnx"
+
+            if pt_path.exists():
+                object.__setattr__(self, "YOLOV11_MODEL_PATH", pt_path)
+            elif onnx_path.exists():
+                object.__setattr__(self, "YOLOV11_MODEL_PATH", onnx_path)
+            else:
+                object.__setattr__(self, "YOLOV11_MODEL_PATH", pt_path)
 
         return self
 
