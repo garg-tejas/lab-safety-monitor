@@ -1,0 +1,48 @@
+# PPE Dataset Configuration for YOLOv8 Training
+# Example configuration - you need to customize this based on your dataset
+
+# Path to dataset
+path: ../data/ppe_dataset  # dataset root dir
+train: images/train  # train images (relative to 'path')
+val: images/val  # val images (relative to 'path')
+test: images/test  # test images (optional)
+
+# Classes
+names:
+  0: helmet
+  1: safety_shoes
+  2: goggles
+  3: mask
+  4: person
+
+# Number of classes
+nc: 5
+
+# ===================================================
+# INSTRUCTIONS FOR CREATING YOUR DATASET:
+# ===================================================
+# 
+# 1. Download PPE datasets from:
+#    - Roboflow Universe: https://universe.roboflow.com/search?q=ppe
+#    - Kaggle: "Hard Hat Workers Dataset"
+#    - Kaggle: "Construction Site Safety Image Dataset"
+#
+# 2. Organize your dataset in this structure:
+#    data/ppe_dataset/
+#    ├── images/
+#    │   ├── train/
+#    │   ├── val/
+#    │   └── test/
+#    └── labels/
+#        ├── train/
+#        ├── val/
+#        └── test/
+#
+# 3. Labels should be in YOLO format (.txt files):
+#    <class_id> <x_center> <y_center> <width> <height>
+#    All values normalized to [0, 1]
+#
+# 4. Train the model:
+#    yolo train data=configs/ppe_dataset.yaml model=yolov8n.pt epochs=100 imgsz=640
+#
+# ===================================================
