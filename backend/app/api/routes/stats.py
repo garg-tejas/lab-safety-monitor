@@ -14,7 +14,18 @@ router = APIRouter(prefix="/stats", tags=["statistics"])
 
 @router.get("/summary")
 async def get_summary_stats(db: AsyncSession = Depends(get_database)):
-    """Get summary statistics for dashboard."""
+    """
+    Get summary statistics for dashboard.
+
+    Compliance Rate Calculation:
+    - Measures the percentage of PEOPLE who are fully compliant
+    - A person is compliant if they have ZERO violations
+    - Formula: (persons_with_zero_violations / total_persons) * 100
+
+    Example:
+        - 10 people tracked, 8 have no violations → 80% compliance rate
+        - More meaningful than event-based calculation for safety monitoring
+    """
     # Total events today
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -41,10 +52,19 @@ async def get_summary_stats(db: AsyncSession = Depends(get_database)):
     total_persons_query = select(func.count(Person.id))
     total_persons = await db.scalar(total_persons_query) or 0
 
-    # Compliance rate
+    # Compliance rate - based on persons, not events
+    # A person is compliant if they have zero violations
     compliance_rate = 100.0
-    if total_events > 0:
-        compliance_rate = ((total_events - total_violations) / total_events) * 100
+    if total_persons > 0:
+        # Count persons with at least one violation
+        persons_with_violations_query = select(func.count(Person.id)).where(
+            Person.violation_count > 0
+        )
+        persons_with_violations = await db.scalar(persons_with_violations_query) or 0
+
+        # Compliance rate = % of persons who are fully compliant
+        compliant_persons = total_persons - persons_with_violations
+        compliance_rate = (compliant_persons / total_persons) * 100
 
     return {
         "total_events": total_events,

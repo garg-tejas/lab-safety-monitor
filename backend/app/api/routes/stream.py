@@ -5,7 +5,6 @@ Includes annotated video generation for frontend display.
 
 import asyncio
 import cv2
-import base64
 import numpy as np
 import logging
 from fastapi import (
@@ -532,20 +531,27 @@ async def live_webcam_feed():
     with real-time PPE detection and violation overlays. The stream uses MJPEG
     format for browser compatibility.
     
+    Performance optimizations:
+    - Async processing: Decouples frame capture from ML processing
+    - Configurable FPS: Display at high FPS, process at low FPS
+    - Result caching: Shows cached detections on skipped frames
+    - Smart frame dropping: Prevents queue buildup
+    
     Returns:
         StreamingResponse with MJPEG video stream
     """
-    import asyncio
+    from ...ml.stream_processor import generate_live_stream
     
-    async def generate_live_frames():
-        """Generate annotated frames from webcam."""
-        pipeline = get_pipeline()
-        pipeline.initialize()
-        
-        cap = cv2.VideoCapture(0)  # Default webcam
-        
-        if not cap.isOpened():
-            # Send error frame
+    # Initialize pipeline
+    pipeline = get_pipeline()
+    pipeline.initialize()
+    
+    # Open webcam
+    cap = cv2.VideoCapture(0)
+    
+    if not cap.isOpened():
+        # Send error frame
+        async def error_frame_generator():
             error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(
                 error_frame,
@@ -561,50 +567,23 @@ async def live_webcam_feed():
                 b'--frame\r\n'
                 b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n'
             )
-            return
         
-        try:
-            frame_skip = max(1, int(30 / settings.FRAME_SAMPLE_RATE))  # Throttle to sample rate
-            frame_count = 0
-            
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                frame_count += 1
-                
-                # Process frame only at sample rate to avoid overload
-                if frame_count % frame_skip == 0:
-                    try:
-                        # Process frame through detection pipeline
-                        result = pipeline.process_frame(frame, video_source="webcam")
-                        annotated = result.get("annotated_frame", frame)
-                    except Exception as e:
-                        # If processing fails, use original frame
-                        logger.error(f"Frame processing error: {e}")
-                        annotated = frame
-                else:
-                    # Use previous annotated frame or current frame
-                    annotated = frame
-                
-                # Encode as JPEG
-                _, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                frame_bytes = buffer.tobytes()
-                
-                yield (
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
-                )
-                
-                # Control frame rate (~30 FPS display, but process at sample rate)
-                await asyncio.sleep(0.033)
-        except Exception as e:
-            logger.error(f"Live feed error: {e}", exc_info=True)
-        finally:
-            cap.release()
+        return StreamingResponse(
+            error_frame_generator(),
+            media_type="multipart/x-mixed-replace; boundary=frame"
+        )
+    
+    # Use async stream processor with configured settings
+    stream_gen = generate_live_stream(
+        cap=cap,
+        pipeline=pipeline,
+        display_fps=settings.LIVE_STREAM_DISPLAY_FPS,
+        process_fps=settings.LIVE_STREAM_PROCESS_FPS,
+        queue_size=settings.LIVE_STREAM_QUEUE_SIZE,
+        interpolate=settings.LIVE_STREAM_INTERPOLATE,
+    )
     
     return StreamingResponse(
-        generate_live_frames(),
+        stream_gen,
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
