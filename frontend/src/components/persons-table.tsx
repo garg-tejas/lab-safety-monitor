@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -13,7 +14,8 @@ import {
 } from "@/components/ui/table";
 import { Person } from "@/lib/api";
 import api from "@/lib/api";
-import { Edit2, Check, X } from "lucide-react";
+import { Edit2, Check, X, User, Calendar, AlertTriangle, TrendingUp } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface PersonsTableProps {
   persons: Person[];
@@ -28,18 +30,26 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
 
   if (loading) {
     return (
-      <div className="text-center py-8 text-muted-foreground">
-        Loading persons...
+      <div className="space-y-3">
+        {[...Array(5)].map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-4 p-4 rounded-xl border border-border/50"
+          >
+            <Skeleton className="h-12 w-12 rounded-xl shimmer" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-32 shimmer" />
+              <Skeleton className="h-3 w-48 shimmer" />
+            </div>
+            <Skeleton className="h-8 w-24 rounded-full shimmer" />
+          </div>
+        ))}
       </div>
     );
   }
 
   if (persons.length === 0) {
-    return (
-      <div className="text-center py-8 text-muted-foreground">
-        No persons tracked yet
-      </div>
-    );
+    return null;
   }
 
   const handleStartEdit = (person: Person) => {
@@ -69,105 +79,168 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
     }
   };
 
+  const getComplianceColor = (rate: number) => {
+    if (rate >= 90) return "success";
+    if (rate >= 70) return "warning";
+    return "danger";
+  };
+
+  const getComplianceProgressColor = (rate: number) => {
+    if (rate >= 90) return "bg-success";
+    if (rate >= 70) return "bg-warning";
+    return "bg-danger";
+  };
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Name</TableHead>
-          <TableHead>ID</TableHead>
-          <TableHead>First Seen</TableHead>
-          <TableHead>Last Seen</TableHead>
-          <TableHead>Events</TableHead>
-          <TableHead>Violations</TableHead>
-          <TableHead>Compliance Rate</TableHead>
-          <TableHead>Actions</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {persons.map((person) => (
-          <TableRow key={person.id}>
-            <TableCell className="font-medium">
-              {editingId === person.id ? (
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  placeholder="Enter name"
-                  className="w-32 px-2 py-1 border rounded text-sm"
-                  disabled={saving}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      handleSaveEdit(person.id);
-                    } else if (e.key === "Escape") {
-                      handleCancelEdit();
-                    }
-                  }}
-                />
-              ) : (
-                person.name || <span className="text-muted-foreground">Unnamed</span>
-              )}
-            </TableCell>
-            <TableCell className="font-mono text-xs">
-              {person.id.substring(0, 8)}...
-            </TableCell>
-            <TableCell className="text-sm">
-              {new Date(person.first_seen).toLocaleString()}
-            </TableCell>
-            <TableCell className="text-sm">
-              {new Date(person.last_seen).toLocaleString()}
-            </TableCell>
-            <TableCell>{person.total_events}</TableCell>
-            <TableCell>
-              <Badge variant={person.violation_count > 0 ? "destructive" : "default"}>
-                {person.violation_count}
-              </Badge>
-            </TableCell>
-            <TableCell>
-              <Badge
-                variant={
-                  person.compliance_rate >= 90
-                    ? "default"
-                    : person.compliance_rate >= 70
-                      ? "secondary"
-                      : "destructive"
-                }
-              >
-                {person.compliance_rate.toFixed(1)}%
-              </Badge>
-            </TableCell>
-            <TableCell>
-              {editingId === person.id ? (
-                <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleSaveEdit(person.id)}
-                    disabled={saving}
-                  >
-                    <Check className="w-4 h-4" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleCancelEdit}
-                    disabled={saving}
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => handleStartEdit(person)}
-                >
-                  <Edit2 className="w-4 h-4" />
-                </Button>
-              )}
-            </TableCell>
+    <div className="rounded-xl border border-border/50 overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow className="bg-muted/30 hover:bg-muted/30">
+            <TableHead className="font-semibold">Person</TableHead>
+            <TableHead className="font-semibold">First Seen</TableHead>
+            <TableHead className="font-semibold">Last Seen</TableHead>
+            <TableHead className="font-semibold text-center">Events</TableHead>
+            <TableHead className="font-semibold text-center">Violations</TableHead>
+            <TableHead className="font-semibold">Compliance Rate</TableHead>
+            <TableHead className="font-semibold text-center">Actions</TableHead>
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {persons.map((person) => {
+            const complianceColor = getComplianceColor(person.compliance_rate);
+            return (
+              <TableRow
+                key={person.id}
+                className="transition-colors hover:bg-muted/50"
+              >
+                <TableCell>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/20">
+                      <User className="w-5 h-5 text-primary" />
+                    </div>
+                    <div>
+                      {editingId === person.id ? (
+                        <input
+                          type="text"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          placeholder="Enter name"
+                          className="w-32 px-3 py-1.5 border border-border rounded-lg text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                          disabled={saving}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleSaveEdit(person.id);
+                            } else if (e.key === "Escape") {
+                              handleCancelEdit();
+                            }
+                          }}
+                        />
+                      ) : (
+                        <>
+                          <p className="font-medium">
+                            {person.name || (
+                              <span className="text-muted-foreground italic">
+                                Unnamed
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs font-mono text-muted-foreground">
+                            {person.id.substring(0, 8)}...
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span>{new Date(person.first_seen).toLocaleDateString()}</span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Calendar className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span>{new Date(person.last_seen).toLocaleDateString()}</span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-center">
+                  <Badge variant="secondary" className="tabular-nums">
+                    {person.total_events}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-center">
+                  <Badge
+                    variant={person.violation_count > 0 ? "danger-soft" : "success-soft"}
+                    className="tabular-nums"
+                  >
+                    <AlertTriangle
+                      className={cn(
+                        "w-3 h-3 mr-1",
+                        person.violation_count > 0 ? "text-danger" : "text-success"
+                      )}
+                    />
+                    {person.violation_count}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <div className="flex items-center gap-3 min-w-[180px]">
+                    <div className="flex-1">
+                      <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all duration-500",
+                            getComplianceProgressColor(person.compliance_rate)
+                          )}
+                          style={{ width: `${person.compliance_rate}%` }}
+                        />
+                      </div>
+                    </div>
+                    <Badge variant={`${complianceColor}-soft` as any} className="tabular-nums min-w-[60px] justify-center">
+                      <TrendingUp className="w-3 h-3 mr-1" />
+                      {person.compliance_rate.toFixed(1)}%
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell className="text-center">
+                  {editingId === person.id ? (
+                    <div className="flex justify-center gap-1">
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => handleSaveEdit(person.id)}
+                        disabled={saving}
+                        className="h-8 w-8 text-success hover:text-success hover:bg-success/10"
+                      >
+                        <Check className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={handleCancelEdit}
+                        disabled={saving}
+                        className="h-8 w-8 text-danger hover:text-danger hover:bg-danger/10"
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      onClick={() => handleStartEdit(person)}
+                      className="h-8 w-8 hover:bg-primary/10 hover:text-primary"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
