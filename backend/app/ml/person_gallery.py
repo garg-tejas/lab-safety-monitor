@@ -30,8 +30,8 @@ class PersonGallery:
     Maintains a gallery of known persons for re-identification.
 
     Matching priority:
-    1. Face embedding match (if available)
-    2. Appearance feature match (fallback)
+    1. Face embedding match
+    2. Appearance feature match
     3. No match: create new person_id
     """
 

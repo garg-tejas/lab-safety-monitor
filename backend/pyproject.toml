@@ -1,7 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "MarketWise Lab Safety Monitoring System Backend"
+description = "Lab Safety Monitoring System Backend"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,7 +16,7 @@ dependencies = [
     "python-multipart>=0.0.21",
     "scipy>=1.13.0",
     "sqlalchemy>=2.0.36",
-    # PyTorch with CUDA 12.9 support (versions must match)
+    # PyTorch with CUDA 12.8 support (versions must match)
     # torch 2.8.0 + torchvision 0.23.0 + torchaudio 2.8.0 are compatible
     "torch==2.8.0",
     "torchaudio==2.8.0",
@@ -44,19 +44,19 @@ sam2 = [
     "sam-2 @ git+https://github.com/facebookresearch/sam2.git",
 ]
 
-# PyTorch CUDA configuration (CUDA 12.9)
+# PyTorch CUDA configuration (CUDA 12.8)
 # This ensures torch, torchvision, and torchaudio are installed from PyTorch's CUDA wheel repository
 [[tool.uv.index]]
-name = "pytorch-cu129"
-url = "https://download.pytorch.org/whl/cu129"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-# Use CUDA 12.9 builds on Linux/Windows (fallback to CPU on Mac)
+# Use CUDA 12.8 builds on Linux/Windows (fallback to CPU on Mac)
 # Platform markers ensure correct wheels are selected
-torch = { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
-torchvision = { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
-torchaudio = { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+torchvision = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+torchaudio = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
 
 # Alternative: If specific versions are needed, you can also try:
-# torch = ">=2.5.1,<2.10"  # Let uv find a compatible CUDA 12.9 version
+# torch = ">=2.5.1,<2.10"  # Let uv find a compatible CUDA 12.8 version

@@ -520,7 +520,7 @@ class SAM3Segmenter:
         frame: np.ndarray,
         detections: Optional[List[Dict[str, Any]]],
     ) -> Dict[int, np.ndarray]:
-        """Process frame using per-frame segmentation (fallback)."""
+        """Process frame using per-frame segmentation."""
         if not detections:
             logger.debug("[SAM3] No detections for per-frame processing")
             return {}

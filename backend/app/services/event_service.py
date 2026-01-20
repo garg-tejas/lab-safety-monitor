@@ -54,11 +54,13 @@ class EventService:
         event_id: str,
         end_frame: int,
         end_timestamp: datetime,
+        final_missing_ppe: Optional[List[str]] = None,
     ) -> Optional[ComplianceEvent]:
         """
         Close an ongoing event when the violation ends.
 
-        Updates the event with end_frame, end_timestamp, and duration.
+        Updates the event with end_frame, end_timestamp, duration,
+        and optionally updates the missing_ppe list with the accumulated union.
         """
         result = await self.session.execute(
             select(ComplianceEvent).where(ComplianceEvent.id == event_id)
@@ -69,6 +71,11 @@ class EventService:
             event.end_frame = end_frame
             event.end_timestamp = end_timestamp
             event.is_ongoing = False
+
+            # Update missing_ppe with the full accumulated set if provided
+            if final_missing_ppe:
+                event.missing_ppe = final_missing_ppe
+
             if event.start_frame is not None:
                 event.duration_frames = end_frame - event.start_frame + 1
             else:

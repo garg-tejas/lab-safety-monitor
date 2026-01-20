@@ -6,6 +6,7 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
+from ..core.websocket import manager as ws_manager
 from ..services.event_service import EventService
 from ..services.person_service import PersonService
 from ..services.deduplication import get_deduplication_manager, DeduplicationManager
@@ -50,7 +51,9 @@ class PersistenceManager:
         persons = result.get("persons", [])
         frame_number = to_python_type(result.get("frame_number", 0))
         timestamp_str = result.get("timestamp")
-        timestamp = datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now()
+        timestamp = (
+            datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now()
+        )
 
         created_events = 0
         closed_events = 0
@@ -67,7 +70,9 @@ class PersistenceManager:
             # Skip track-only IDs for face-recognized persons check
             if not person_id.startswith("track_"):
                 face_embedding = person.get("face_embedding")
-                await self.person_service.get_or_create_person(person_id, face_embedding)
+                await self.person_service.get_or_create_person(
+                    person_id, face_embedding
+                )
 
             # Get violation info from temporal filter results
             is_stable_violation = person.get("stable_violation", False)
@@ -84,19 +89,37 @@ class PersistenceManager:
                 all_violations.append(f"action:{av.get('action', 'unknown')}")
 
             # Use deduplication to determine if we should create an event
-            should_create, ended_event_id, reason = self.dedup_manager.should_create_event(
-                person_id=person_id,
-                video_source=video_source,
-                missing_ppe=all_violations,
-                frame_number=frame_number,
+            should_create, ended_event_id, reason, final_ppe = (
+                self.dedup_manager.should_create_event(
+                    person_id=person_id,
+                    video_source=video_source,
+                    missing_ppe=all_violations,
+                    frame_number=frame_number,
+                )
             )
 
             # Close ended event if any
             if ended_event_id:
+                # Extract PPE and actions from final violations dict
+                final_ppe_list = []
+                final_actions_list = []
+
+                if isinstance(final_ppe, dict):
+                    final_ppe_list = final_ppe.get("ppe", [])
+                    final_actions_list = final_ppe.get("actions", [])
+                elif isinstance(final_ppe, list):
+                    # Backward compatibility: if it's still a list, separate them
+                    for item in final_ppe:
+                        if item.startswith("action:"):
+                            final_actions_list.append(item.replace("action:", ""))
+                        else:
+                            final_ppe_list.append(item)
+
                 await self.event_service.close_event(
                     event_id=ended_event_id,
                     end_frame=frame_number - 1,  # Ended on previous frame
                     end_timestamp=timestamp,
+                    final_missing_ppe=final_ppe_list,
                 )
                 closed_events += 1
 
@@ -114,7 +137,9 @@ class PersistenceManager:
                     )
 
                 # Prepare action violations for storage
-                action_violation_names = [av.get("action", "unknown") for av in action_violations]
+                action_violation_names = [
+                    av.get("action", "unknown") for av in action_violations
+                ]
 
                 # Create the event
                 event = await self.event_service.create_event(
@@ -146,6 +171,20 @@ class PersistenceManager:
                 if not person_id.startswith("track_"):
                     await self.person_service.increment_event_counts(person_id, True)
 
+                # Broadcast event via WebSocket
+                await ws_manager.broadcast(
+                    {
+                        "type": "violation",
+                        "title": "New Safety Violation",
+                        "message": f"Person {person_id} missing {', '.join(all_violations)}",
+                        "timestamp": timestamp.isoformat(),
+                        "severity": "warning",
+                        "event_id": event.id,
+                        "person_id": person_id,
+                        "missing_ppe": all_violations,
+                    }
+                )
+
                 created_events += 1
 
         await self.session.commit()
@@ -155,9 +194,7 @@ class PersistenceManager:
             "closed_events": closed_events,
         }
 
-    async def finalize_video_processing(
-        self, video_source: str
-    ) -> int:
+    async def finalize_video_processing(self, video_source: str) -> int:
         """
         Finalize all active violations when video processing completes.
 
@@ -166,11 +203,12 @@ class PersistenceManager:
         """
         events_to_close = self.dedup_manager.finalize_video(video_source)
 
-        for event_id, last_frame in events_to_close:
+        for event_id, last_frame, final_ppe in events_to_close:
             await self.event_service.close_event(
                 event_id=event_id,
                 end_frame=last_frame,
                 end_timestamp=datetime.now(),
+                final_missing_ppe=final_ppe,
             )
 
         await self.session.commit()

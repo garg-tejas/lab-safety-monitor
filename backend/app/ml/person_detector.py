@@ -77,7 +77,9 @@ class PersonDetector:
             try:
                 self.model = YOLO(str(model_path))
             except Exception as e:
-                print(f"Warning: Failed to load local model ({e}), attempting download...")
+                print(
+                    f"Warning: Failed to load local model ({e}), attempting download..."
+                )
                 # Delete corrupted file
                 model_path.unlink(missing_ok=True)
                 # Fall through to download logic below
@@ -86,7 +88,7 @@ class PersonDetector:
             print("Downloading YOLOv8-medium model for person detection...")
             max_retries = 1
             last_error = None
-            
+
             # First try ultralytics auto-download
             for attempt in range(max_retries + 1):
                 try:
@@ -114,12 +116,12 @@ class PersonDetector:
                                     print(f"Removed potentially corrupted file: {file}")
                                 except Exception:
                                     pass
-            
+
             # If ultralytics download failed, try manual download
             if self.model is None:
                 print("Ultralytics auto-download failed, attempting manual download...")
                 model_url = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8m.pt"
-                
+
                 if requests is None:
                     raise RuntimeError(
                         f"Failed to download YOLOv8-medium model. "
@@ -127,39 +129,42 @@ class PersonDetector:
                         f"Manual download requires 'requests' package. "
                         f"Install with: pip install requests tqdm"
                     ) from last_error
-                
+
                 try:
                     print(f"Downloading from: {model_url}")
                     response = requests.get(model_url, stream=True, timeout=30)
                     response.raise_for_status()
-                    
-                    total_size = int(response.headers.get('content-length', 0))
+
+                    total_size = int(response.headers.get("content-length", 0))
                     model_path.parent.mkdir(parents=True, exist_ok=True)
-                    
+
                     # Download with progress bar if tqdm available
                     if tqdm is not None:
-                        with open(model_path, 'wb') as f, tqdm(
-                            desc="Downloading yolov8m.pt",
-                            total=total_size,
-                            unit='B',
-                            unit_scale=True,
-                            unit_divisor=1024,
-                        ) as bar:
+                        with (
+                            open(model_path, "wb") as f,
+                            tqdm(
+                                desc="Downloading yolov8m.pt",
+                                total=total_size,
+                                unit="B",
+                                unit_scale=True,
+                                unit_divisor=1024,
+                            ) as bar,
+                        ):
                             for chunk in response.iter_content(chunk_size=8192):
                                 if chunk:
                                     f.write(chunk)
                                     bar.update(len(chunk))
                     else:
                         # Simple download without progress bar
-                        with open(model_path, 'wb') as f:
+                        with open(model_path, "wb") as f:
                             for chunk in response.iter_content(chunk_size=8192):
                                 if chunk:
                                     f.write(chunk)
-                    
+
                     print(f"Model downloaded successfully to: {model_path}")
                     # Now load the manually downloaded model
                     self.model = YOLO(str(model_path))
-                    
+
                 except Exception as e:
                     # Clean up partial download
                     if model_path.exists():
@@ -167,7 +172,7 @@ class PersonDetector:
                             model_path.unlink()
                         except Exception:
                             pass
-                    
+
                     raise RuntimeError(
                         f"Failed to download YOLOv8-medium model. "
                         f"Ultralytics error: {last_error}. "
@@ -210,6 +215,7 @@ class PersonDetector:
             conf=self.confidence_threshold,
             classes=[self.PERSON_CLASS_ID],  # Only detect persons
             verbose=False,
+            save=False,
         )
 
         persons = []
@@ -231,7 +237,12 @@ class PersonDetector:
                 persons.append(
                     {
                         "id": i,
-                        "box": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                        "box": [
+                            float(xyxy[0]),
+                            float(xyxy[1]),
+                            float(xyxy[2]),
+                            float(xyxy[3]),
+                        ],
                         "score": conf,
                         "label": "person",
                         "mask": None,  # Will be filled by SAM2
@@ -261,14 +272,26 @@ class PersonDetector:
         if self.model is None:
             return []
 
-        # Use YOLOv8 native tracking
-        results = self.model.track(
-            frame,
-            persist=True,  # Maintain track_ids across frames
-            conf=self.confidence_threshold,
-            classes=[self.PERSON_CLASS_ID],  # Only detect persons
-            verbose=False,
-        )
+        if frame is None or frame.size == 0:
+            print("Warning: PersonDetector received empty frame")
+            return []
+
+        try:
+            # Use YOLOv8 native tracking
+            results = self.model.track(
+                frame,
+                persist=True,  # Maintain track_ids across frames
+                conf=self.confidence_threshold,
+                classes=[self.PERSON_CLASS_ID],  # Only detect persons
+                verbose=False,
+                save=False,
+            )
+        except Exception as e:
+            print(f"Error in PersonDetector.detect_with_tracking: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return []
 
         persons = []
         for result in results:
@@ -296,7 +319,12 @@ class PersonDetector:
                     {
                         "id": i,
                         "track_id": int(track_id) if track_id is not None else None,
-                        "box": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                        "box": [
+                            float(xyxy[0]),
+                            float(xyxy[1]),
+                            float(xyxy[2]),
+                            float(xyxy[3]),
+                        ],
                         "score": conf,
                         "label": "person",
                     }

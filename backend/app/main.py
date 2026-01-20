@@ -6,7 +6,13 @@ from .core.config import settings
 from .core.database import init_db, async_session
 from .services.person_service import PersonService
 from .ml.pipeline import get_pipeline
-from .api.routes import events_router, persons_router, stats_router, stream_router
+from .api.routes import (
+    events_router,
+    persons_router,
+    stats_router,
+    stream_router,
+    ws_router,
+)
 
 
 @asynccontextmanager
@@ -59,6 +65,7 @@ app.include_router(events_router, prefix="/api")
 app.include_router(persons_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(stream_router, prefix="/api")
+app.include_router(ws_router, prefix="/api")
 
 
 @app.get("/")

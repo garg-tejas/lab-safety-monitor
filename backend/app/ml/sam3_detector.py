@@ -1,15 +1,23 @@
 """
-SAM 3 Detector for PPE Detection
+SAM 3 Detector for PPE Detection (Improved)
 
 Uses Meta's SAM 3 model via Hugging Face Transformers for text-prompted segmentation.
 Supports Promptable Concept Segmentation (PCS) with text prompts.
+
+Improvements:
+- bfloat16 optimization for speed
+- Better batch processing
+- Improved error handling
 """
 
 import torch
 import numpy as np
+import logging
 from PIL import Image
 from typing import Dict, List, Any, Optional
 from ..core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SAM3Detector:
@@ -18,12 +26,18 @@ class SAM3Detector:
 
     Uses Sam3Model and Sam3Processor for Promptable Concept Segmentation (PCS).
     Detects: safety goggles, protective helmet, face mask, lab coat
+
+    Improvements:
+    - bfloat16 automatic mixed precision
+    - Better batch processing
+    - Improved logging
     """
 
     def __init__(self):
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
         self.ppe_prompts = settings.PPE_PROMPTS
         self.confidence_threshold = settings.DETECTION_CONFIDENCE_THRESHOLD
         self._initialized = False
@@ -39,18 +53,24 @@ class SAM3Detector:
         try:
             from transformers import Sam3Model, Sam3Processor
 
+            logger.info(f"Loading SAM 3 model from Hugging Face ({model_id}) on {self.device}...")
             print(f"Loading SAM 3 model from Hugging Face ({model_id}) on {self.device}...")
-            self.model = Sam3Model.from_pretrained(model_id).to(self.device)
+
+            self.model = Sam3Model.from_pretrained(model_id).to(self.device, dtype=self.dtype)
             self.processor = Sam3Processor.from_pretrained(model_id)
             self._model_available = True
             self._initialized = True
-            print("SAM 3 model loaded successfully!")
+
+            logger.info(f"SAM 3 model loaded successfully on {self.device} with dtype={self.dtype}")
+            print(f"SAM 3 model loaded successfully! Device: {self.device}, dtype: {self.dtype}")
         except ImportError as e:
+            logger.error(f"SAM 3 (Transformers) not available: {e}")
             print(f"SAM 3 (Transformers) not available: {e}")
             print("Falling back to mock detector for development")
             self._model_available = False
             self._initialized = True  # Use mock mode
         except Exception as e:
+            logger.error(f"Failed to load SAM 3 model: {e}")
             print(f"Failed to load SAM 3 model: {e}")
             print("Falling back to mock detector for development")
             self._model_available = False
@@ -89,11 +109,12 @@ class SAM3Detector:
             return self._mock_detect(frame)
 
         try:
-            # Detect persons using text prompt
+            # Detect persons using text prompt with bfloat16
             inputs = self.processor(images=image, text="person", return_tensors="pt").to(self.device)
 
-            with torch.no_grad():
-                outputs = self.model(**inputs)
+            with torch.inference_mode():
+                with torch.autocast(self.device, dtype=self.dtype):
+                    outputs = self.model(**inputs)
 
             # Post-process person results
             person_results = self.processor.post_process_instance_segmentation(
@@ -129,14 +150,15 @@ class SAM3Detector:
                         }
                     )
 
-            # Detect each PPE type using text prompts
+            # Detect each PPE type using text prompts with bfloat16
             for ppe_type in self.ppe_prompts:
                 inputs = self.processor(
                     images=image, text=ppe_type, return_tensors="pt"
                 ).to(self.device)
 
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
+                with torch.inference_mode():
+                    with torch.autocast(self.device, dtype=self.dtype):
+                        outputs = self.model(**inputs)
 
                 # Post-process PPE results
                 ppe_results = self.processor.post_process_instance_segmentation(
@@ -172,6 +194,7 @@ class SAM3Detector:
                 results["ppe_detections"][ppe_type] = detections
 
         except Exception as e:
+            logger.error(f"SAM 3 detection error: {e}")
             print(f"SAM 3 detection error: {e}")
             import traceback
             traceback.print_exc()

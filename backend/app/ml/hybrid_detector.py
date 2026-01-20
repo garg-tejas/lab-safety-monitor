@@ -2,6 +2,12 @@
 Hybrid Detector
 
 Combined YOLOv8 (person tracking) + YOLOv11 (PPE detection) + SAM3/SAM2 (segmentation) pipeline.
+
+Flow:
+- PersonDetector (YOLOv8) detects persons with tracking
+- SAM3/SAM2 generates precise masks for persons
+- YOLOv11 detects PPE and violations
+- Associate PPE with persons using spatial overlap
 """
 
 import numpy as np
@@ -21,10 +27,10 @@ class HybridDetector:
     Combined YOLOv8 + YOLOv11 + SAM3/SAM2 pipeline.
 
     Flow:
-    1. PersonDetector (YOLOv8) -> person boxes with track_ids
-    2. SAM3/SAM2 -> person masks
-    3. YOLOv11 -> PPE + violation boxes
-    4. Associate PPE with persons
+    - PersonDetector (YOLOv8) detects person boxes with track_ids
+    - SAM3/SAM2 generates person masks
+    - YOLOv11 detects PPE and violation boxes
+    - Associate PPE with persons using spatial overlap
     """
 
     def __init__(self):
@@ -66,7 +72,6 @@ class HybridDetector:
         if self.ppe_detector.model is None:
             logger.error("YOLOv11 model failed to load - PPE detection disabled")
 
-        # SAM3 segmenter (preferred)
         if self._use_sam3:
             try:
                 from .sam3_segmenter import get_sam3_segmenter
@@ -80,7 +85,6 @@ class HybridDetector:
                 self._use_sam3 = False
                 self._use_sam2 = True
 
-        # SAM2 fallback
         if not self._use_sam3 and self._use_sam2:
             try:
                 from .sam2_segmenter import get_sam2_segmenter
@@ -106,22 +110,18 @@ class HybridDetector:
 
         self._frame_count += 1
 
-        # 1. Detect persons with tracking
         persons = self.person_detector.detect_with_tracking(frame)
 
-        # 2. Add masks
         if self.sam3_segmenter and self._use_sam3:
             persons = self._add_masks_sam3(frame, persons)
         elif self.sam2_segmenter and self._use_sam2:
             persons = self._add_masks_sam2(frame, persons)
 
-        # 3. Detect PPE and violations
         ppe_result = self.ppe_detector.detect(frame)
         ppe_detections = ppe_result.get("ppe_detections", {})
         violation_detections = ppe_result.get("violation_detections", {})
         action_violations = ppe_result.get("action_violations", [])
 
-        # 4. Add masks to PPE
         segmenter = self.sam3_segmenter or self.sam2_segmenter
         if segmenter and self._segment_ppe:
             ppe_detections = self._add_masks_to_ppe(frame, ppe_detections)
@@ -261,7 +261,9 @@ class HybridDetector:
             return persons
 
         try:
-            results = self.sam2_segmenter.segment_boxes(frame, boxes, labels)
+            results = self.sam2_segmenter.segment_boxes_batch(
+                frame, boxes, labels, use_multimask=True
+            )
             for person, result in zip(persons, results):
                 if result.get("valid") and result.get("mask") is not None:
                     person["mask"] = self._normalize_mask(result["mask"])
@@ -288,7 +290,9 @@ class HybridDetector:
             return ppe_detections
 
         try:
-            results = segmenter.segment_boxes(frame, all_boxes, all_labels)
+            results = segmenter.segment_boxes_batch(
+                frame, all_boxes, all_labels, use_multimask=True
+            )
             for (ppe_type, idx), result in zip(box_to_key, results):
                 if result.get("valid") and result.get("mask") is not None:
                     ppe_detections[ppe_type][idx]["mask"] = result["mask"]
@@ -308,7 +312,7 @@ class HybridDetector:
         class_map = getattr(settings, "PPE_CLASS_MAP", {})
         required_ppe = settings.REQUIRED_PPE
         violation_detections = violation_detections or {}
-        action_violations = action_violations or []
+        action_violations = action_violations or {}
 
         for person in persons:
             person_box = person.get("box", [0, 0, 0, 0])
@@ -316,7 +320,6 @@ class HybridDetector:
             detected_ppe, missing_ppe, person_actions = [], [], []
             detection_confidence, ppe_dets = {}, []
 
-            # Check positive PPE detections
             for ppe_class, ppe_list in ppe_detections.items():
                 if ppe_class.startswith("No "):
                     continue
@@ -344,13 +347,11 @@ class HybridDetector:
                             }
                         )
 
-            # Check violation detections
             for viol_class, viol_list in violation_detections.items():
                 for viol in viol_list:
                     viol_box = viol.get("box", [0, 0, 0, 0])
                     viol_mask = viol.get("mask")
 
-                    # Check center point
                     viol_cx = (viol_box[0] + viol_box[2]) / 2
                     viol_cy = (viol_box[1] + viol_box[3]) / 2
                     center_inside = (
@@ -358,7 +359,6 @@ class HybridDetector:
                         and person_box[1] <= viol_cy <= person_box[3]
                     )
 
-                    # Calculate containment
                     if person_mask is not None and viol_mask is not None:
                         containment = calculate_mask_containment(viol_mask, person_mask)
                     else:
@@ -389,7 +389,6 @@ class HybridDetector:
                             }
                         )
 
-            # Check action violations
             for action in action_violations:
                 action_box = action.get("box", [0, 0, 0, 0])
                 containment = calculate_box_containment(action_box, person_box)
@@ -443,14 +442,13 @@ class HybridDetector:
         self.reset_video_state()
 
     def reset_sam2_state(self) -> None:
-        """Legacy alias for reset_video_state."""
+        """Alias for reset_video_state."""
         self.reset_video_state()
 
     def __repr__(self) -> str:
         return f"HybridDetector(initialized={self._initialized})"
 
 
-# Singleton
 _hybrid_detector: Optional[HybridDetector] = None
 
 

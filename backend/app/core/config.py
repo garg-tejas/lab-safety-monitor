@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Application settings with environment variable support."""
 
     # App settings
-    APP_NAME: str = "MarketWise Lab Safety"
+    APP_NAME: str = "Lab Safety"
     DEBUG: bool = True
 
     # API Settings
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     SAM3_MODEL_PATH: Optional[Path] = None
     USE_SAM3: bool = Field(default=True)
 
-    # SAM2 settings (fallback)
+    # SAM2 settings
     SAM2_MODEL_TYPE: str = Field(default="sam2.1_hiera_base_plus")
     SAM2_MODEL_PATH: Optional[Path] = None
     USE_SAM2: bool = Field(default=True)
@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
     TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)
+
+    # Live stream settings
+    LIVE_STREAM_DISPLAY_FPS: int = Field(default=30)  # Display frame rate
+    LIVE_STREAM_PROCESS_FPS: int = Field(default=3)   # ML processing rate (lower = faster)
+    LIVE_STREAM_QUEUE_SIZE: int = Field(default=2)    # Max queued frames for processing
+    LIVE_STREAM_INTERPOLATE: bool = Field(default=False)  # Smooth bbox movement (optional)
 
     # Multi-scale detection
     MULTI_SCALE_ENABLED: bool = Field(default=True)

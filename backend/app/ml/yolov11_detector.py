@@ -188,7 +188,7 @@ class YOLOv11Detector:
             scaled_frame = frame
 
         min_threshold = min(self.confidence_threshold, self.violation_threshold)
-        results = self.model(scaled_frame, conf=min_threshold, verbose=False)
+        results = self.model(scaled_frame, conf=min_threshold, verbose=False, save=False)
 
         detections = []
         for result in results:
