@@ -19,6 +19,7 @@ import {
   Menu,
   X,
   Zap,
+  Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +28,7 @@ import {
   setStorageItem,
   migrateStorageKeys,
 } from "@/lib/storage";
+import { useDemoMode } from "@/providers/demo-context";
 
 const sidebarItems = [
   {
@@ -50,6 +52,117 @@ const sidebarItems = [
     icon: Users,
   },
 ];
+
+// System status indicator with demo mode toggle
+function SystemIndicator({ collapsed }: { collapsed: boolean }) {
+  const { isDemoMode, toggleDemoMode, isBackendAvailable } = useDemoMode();
+
+  if (collapsed) {
+    return (
+      <motion.button
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={toggleDemoMode}
+        className={cn(
+          "mt-4 w-full p-2 corner-cut border flex items-center justify-center cursor-pointer transition-colors",
+          isDemoMode
+            ? "bg-info/10 border-info/30 hover:bg-info/20"
+            : "bg-success/10 border-success/30 hover:bg-success/20"
+        )}
+      >
+        <div className="relative">
+          <motion.div
+            animate={{ scale: [1, 1.3, 1], opacity: [1, 0.6, 1] }}
+            transition={{ duration: 2, repeat: Infinity }}
+            className={cn(
+              "w-2 h-2 rounded-full",
+              isDemoMode ? "bg-info" : "bg-success"
+            )}
+          />
+        </div>
+      </motion.button>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-4 space-y-2"
+    >
+      {/* Demo Mode Toggle */}
+      <button
+        onClick={toggleDemoMode}
+        className={cn(
+          "w-full p-3 corner-cut border transition-all cursor-pointer",
+          isDemoMode
+            ? "bg-info/10 border-info/30 hover:bg-info/20"
+            : "bg-muted/50 border-border hover:bg-muted"
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <motion.div
+            animate={isDemoMode ? { rotate: [0, 360] } : {}}
+            transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+            className={cn(
+              "w-5 h-5",
+              isDemoMode ? "text-info" : "text-muted-foreground"
+            )}
+          >
+            <Play className="w-5 h-5" />
+          </motion.div>
+          <span className={cn(
+            "text-[10px] font-black uppercase tracking-widest font-mono",
+            isDemoMode ? "text-info" : "text-muted-foreground"
+          )}>
+            {isDemoMode ? "DEMO MODE" : "ENABLE DEMO"}
+          </span>
+        </div>
+      </button>
+
+      {/* System Status */}
+      <div className={cn(
+        "p-3 corner-cut border",
+        isDemoMode
+          ? "bg-info/10 border-info/30"
+          : isBackendAvailable
+            ? "bg-success/10 border-success/30"
+            : "bg-warning/10 border-warning/30"
+      )}>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <motion.div
+              animate={{ scale: [1, 1.3, 1], opacity: [1, 0.6, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className={cn(
+                "w-2 h-2 rounded-full",
+                isDemoMode
+                  ? "bg-info"
+                  : isBackendAvailable
+                    ? "bg-success"
+                    : "bg-warning"
+              )}
+            />
+          </div>
+          <span className={cn(
+            "text-[10px] font-black uppercase tracking-widest font-mono",
+            isDemoMode
+              ? "text-info"
+              : isBackendAvailable
+                ? "text-success"
+                : "text-warning"
+          )}>
+            {isDemoMode
+              ? "DEMO ACTIVE"
+              : isBackendAvailable
+                ? "SYSTEM ACTIVE"
+                : "BACKEND OFFLINE"}
+          </span>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 // Mobile sidebar overlay
 function MobileSidebar({
@@ -480,26 +593,7 @@ export function Sidebar() {
           </Link>
 
           {/* System indicator */}
-          {!collapsed && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 p-3 corner-cut bg-success/10 border border-success/30"
-            >
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <motion.div
-                    animate={{ scale: [1, 1.3, 1], opacity: [1, 0.6, 1] }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                    className="w-2 h-2 bg-success rounded-full"
-                  />
-                </div>
-                <span className="text-[10px] font-black text-success uppercase tracking-widest font-mono">
-                  SYSTEM ACTIVE
-                </span>
-              </div>
-            </motion.div>
-          )}
+          <SystemIndicator collapsed={collapsed} />
         </div>
       </motion.div>
     </>

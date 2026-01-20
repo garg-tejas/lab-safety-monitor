@@ -10,6 +10,19 @@ import api, {
   ProcessingJob,
   VideoFile,
 } from "@/lib/api";
+import {
+  demoStats,
+  demoTimeline,
+  demoPPEBreakdown,
+  demoProcessingJobs,
+  demoVideos,
+  getDemoEvents,
+  getDemoPersons,
+  getDemoRecentViolations,
+  getDemoTopViolators,
+  getDemoPerson,
+} from "@/lib/demo-data";
+import { useDemoMode } from "@/providers/demo-context";
 
 // Query keys for cache management
 export const queryKeys = {
@@ -45,25 +58,31 @@ export const queryKeys = {
 // ============ Stats Queries ============
 
 export function useSummaryStats() {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.stats.summary,
-    queryFn: () => api.getSummaryStats(),
-    refetchInterval: 30000, // Refetch every 30 seconds
+    queryKey: [...queryKeys.stats.summary, isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(demoStats) : api.getSummaryStats(),
+    refetchInterval: isDemoMode ? false : 30000,
   });
 }
 
 export function useViolationTimeline(days: number = 7) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.stats.timeline(days),
-    queryFn: () => api.getViolationTimeline(days),
-    staleTime: 60000, // Data is fresh for 1 minute
+    queryKey: [...queryKeys.stats.timeline(days), isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(demoTimeline) : api.getViolationTimeline(days),
+    staleTime: 60000,
   });
 }
 
 export function useViolationsByPPE() {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.stats.byPPE,
-    queryFn: () => api.getViolationsByPPE(),
+    queryKey: [...queryKeys.stats.byPPE, isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(demoPPEBreakdown) : api.getViolationsByPPE(),
     staleTime: 60000,
   });
 }
@@ -76,63 +95,94 @@ export function useEvents(params: {
   personId?: string;
   violationsOnly?: boolean;
 } = {}) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.events.list(params),
-    queryFn: () =>
-      api.getEvents({
+    queryKey: [...queryKeys.events.list(params), isDemoMode],
+    queryFn: () => {
+      if (isDemoMode) {
+        return Promise.resolve(getDemoEvents({
+          page: params.page,
+          page_size: params.pageSize,
+          violations_only: params.violationsOnly,
+        }));
+      }
+      return api.getEvents({
         page: params.page,
         page_size: params.pageSize,
         person_id: params.personId,
         violations_only: params.violationsOnly,
-      }),
+      });
+    },
   });
 }
 
 export function useRecentViolations(limit: number = 10) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.events.recentViolations(limit),
-    queryFn: () => api.getRecentViolations(limit),
-    refetchInterval: 30000, // Refetch every 30 seconds
+    queryKey: [...queryKeys.events.recentViolations(limit), isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(getDemoRecentViolations(limit)) : api.getRecentViolations(limit),
+    refetchInterval: isDemoMode ? false : 30000,
   });
 }
 
 // ============ Persons Queries ============
 
 export function usePersons(page: number = 1, pageSize: number = 20) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.persons.list(page, pageSize),
-    queryFn: () => api.getPersons(page, pageSize),
+    queryKey: [...queryKeys.persons.list(page, pageSize), isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(getDemoPersons(page, pageSize)) : api.getPersons(page, pageSize),
   });
 }
 
 export function usePerson(personId: string) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.persons.detail(personId),
-    queryFn: () => api.getPerson(personId),
+    queryKey: [...queryKeys.persons.detail(personId), isDemoMode],
+    queryFn: () => {
+      if (isDemoMode) {
+        const person = getDemoPerson(personId);
+        if (!person) throw new Error("Person not found");
+        return Promise.resolve(person);
+      }
+      return api.getPerson(personId);
+    },
     enabled: !!personId,
   });
 }
 
 export function useTopViolators(limit: number = 5) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.persons.topViolators(limit),
-    queryFn: () => api.getTopViolators(limit),
+    queryKey: [...queryKeys.persons.topViolators(limit), isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve(getDemoTopViolators(limit)) : api.getTopViolators(limit),
   });
 }
 
 export function useUpdatePerson() {
   const queryClient = useQueryClient();
+  const { isDemoMode } = useDemoMode();
 
   return useMutation({
-    mutationFn: ({ personId, name }: { personId: string; name: string | null }) =>
-      api.updatePerson(personId, name),
+    mutationFn: ({ personId, name }: { personId: string; name: string | null }) => {
+      if (isDemoMode) {
+        // In demo mode, just return a mock updated person
+        const person = getDemoPerson(personId);
+        if (!person) throw new Error("Person not found");
+        return Promise.resolve({ ...person, name });
+      }
+      return api.updatePerson(personId, name);
+    },
     onSuccess: (updatedPerson) => {
-      // Update the person in the cache
       queryClient.setQueryData(
         queryKeys.persons.detail(updatedPerson.id),
         updatedPerson
       );
-      // Invalidate the persons list to trigger a refetch
       queryClient.invalidateQueries({ queryKey: queryKeys.persons.all });
     },
   });
@@ -141,18 +191,22 @@ export function useUpdatePerson() {
 // ============ Video Queries ============
 
 export function useUploadedVideos() {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.videos.list,
-    queryFn: () => api.getUploadedVideos(),
+    queryKey: [...queryKeys.videos.list, isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve({ videos: demoVideos }) : api.getUploadedVideos(),
   });
 }
 
 export function useProcessingJobs() {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.videos.jobs,
-    queryFn: () => api.getProcessingJobs(),
+    queryKey: [...queryKeys.videos.jobs, isDemoMode],
+    queryFn: () => isDemoMode ? Promise.resolve({ jobs: demoProcessingJobs }) : api.getProcessingJobs(),
     refetchInterval: (query) => {
-      // Refetch every second if there are active jobs
+      if (isDemoMode) return false;
       const hasActiveJobs = query.state.data?.jobs?.some((j) => j.status === "processing");
       return hasActiveJobs ? 1000 : false;
     },
@@ -160,12 +214,21 @@ export function useProcessingJobs() {
 }
 
 export function useJobStatus(jobId: string) {
+  const { isDemoMode } = useDemoMode();
+
   return useQuery({
-    queryKey: queryKeys.videos.job(jobId),
-    queryFn: () => api.getJobStatus(jobId),
+    queryKey: [...queryKeys.videos.job(jobId), isDemoMode],
+    queryFn: () => {
+      if (isDemoMode) {
+        const job = demoProcessingJobs.find(j => j.id === jobId);
+        if (!job) throw new Error("Job not found");
+        return Promise.resolve(job);
+      }
+      return api.getJobStatus(jobId);
+    },
     enabled: !!jobId,
     refetchInterval: (query) => {
-      // Refetch every second if job is processing
+      if (isDemoMode) return false;
       return query.state.data?.status === "processing" ? 1000 : false;
     },
   });
@@ -173,11 +236,16 @@ export function useJobStatus(jobId: string) {
 
 export function useUploadVideo() {
   const queryClient = useQueryClient();
+  const { isDemoMode } = useDemoMode();
 
   return useMutation({
-    mutationFn: (file: File) => api.uploadVideo(file),
+    mutationFn: (file: File) => {
+      if (isDemoMode) {
+        return Promise.resolve({ message: "Demo mode - upload simulated", filename: file.name, path: `/demo/${file.name}` });
+      }
+      return api.uploadVideo(file);
+    },
     onSuccess: () => {
-      // Invalidate videos list to show the new upload
       queryClient.invalidateQueries({ queryKey: queryKeys.videos.list });
     },
   });
@@ -185,11 +253,16 @@ export function useUploadVideo() {
 
 export function useStartProcessing() {
   const queryClient = useQueryClient();
+  const { isDemoMode } = useDemoMode();
 
   return useMutation({
-    mutationFn: (videoPath: string) => api.startProcessing(videoPath),
+    mutationFn: (videoPath: string) => {
+      if (isDemoMode) {
+        return Promise.resolve({ message: "Demo mode - processing simulated", job_id: "demo-job-new", video_path: videoPath });
+      }
+      return api.startProcessing(videoPath);
+    },
     onSuccess: () => {
-      // Invalidate jobs to show the new job
       queryClient.invalidateQueries({ queryKey: queryKeys.videos.jobs });
     },
   });
@@ -197,11 +270,16 @@ export function useStartProcessing() {
 
 export function useDeleteVideo() {
   const queryClient = useQueryClient();
+  const { isDemoMode } = useDemoMode();
 
   return useMutation({
-    mutationFn: (filename: string) => api.deleteVideo(filename),
+    mutationFn: (filename: string) => {
+      if (isDemoMode) {
+        return Promise.resolve({ message: "Demo mode - delete simulated" });
+      }
+      return api.deleteVideo(filename);
+    },
     onSuccess: () => {
-      // Invalidate videos list
       queryClient.invalidateQueries({ queryKey: queryKeys.videos.list });
     },
   });

@@ -23,8 +23,11 @@ import {
 } from "lucide-react";
 import { api, ProcessingJob, VideoFile } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useDemoMode } from "@/providers/demo-context";
+import { demoVideos, demoProcessingJobs } from "@/lib/demo-data";
 
 export function VideoProcessor() {
+  const { isDemoMode } = useDemoMode();
   const [videos, setVideos] = useState<VideoFile[]>([]);
   const [jobs, setJobs] = useState<ProcessingJob[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -37,15 +40,23 @@ export function VideoProcessor() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const fetchVideos = useCallback(async () => {
+    if (isDemoMode) {
+      setVideos(demoVideos);
+      return;
+    }
     try {
       const result = await api.getUploadedVideos();
       setVideos(result.videos);
     } catch (err) {
       console.error("Failed to fetch videos:", err);
     }
-  }, []);
+  }, [isDemoMode]);
 
   const fetchJobs = useCallback(async () => {
+    if (isDemoMode) {
+      setJobs(demoProcessingJobs);
+      return;
+    }
     try {
       const result = await api.getProcessingJobs();
       setJobs(result.jobs);
@@ -58,14 +69,15 @@ export function VideoProcessor() {
     } catch (err) {
       console.error("Failed to fetch jobs:", err);
     }
-  }, []);
+  }, [isDemoMode]);
 
   const startPolling = useCallback(() => {
+    if (isDemoMode) return; // Don't poll in demo mode
     if (pollIntervalRef.current) return;
     pollIntervalRef.current = setInterval(() => {
       fetchJobs();
     }, 1000);
-  }, [fetchJobs]);
+  }, [fetchJobs, isDemoMode]);
 
   useEffect(() => {
     fetchVideos();
@@ -78,9 +90,15 @@ export function VideoProcessor() {
     };
   }, [fetchVideos, fetchJobs]);
 
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (isDemoMode) {
+      setError("Video upload is disabled in demo mode");
+      return;
+    }
 
     setIsUploading(true);
     setUploadProgress(0);
@@ -110,6 +128,10 @@ export function VideoProcessor() {
   };
 
   const handleProcess = async (videoPath: string) => {
+    if (isDemoMode) {
+      setError("Video processing is disabled in demo mode");
+      return;
+    }
     try {
       setError(null);
       await api.startProcessing(videoPath);
@@ -121,6 +143,10 @@ export function VideoProcessor() {
   };
 
   const handleDelete = async (filename: string) => {
+    if (isDemoMode) {
+      setError("Video deletion is disabled in demo mode");
+      return;
+    }
     try {
       await api.deleteVideo(filename);
       await fetchVideos();
@@ -256,7 +282,28 @@ export function VideoProcessor() {
               </div>
             </div>
             <div className="relative aspect-video bg-black">
-              {isStreaming ? (
+              {isDemoMode ? (
+                /* Demo mode: use local video file */
+                <video
+                  key="demo-video"
+                  ref={videoRef}
+                  controls
+                  autoPlay
+                  muted
+                  playsInline
+                  loop
+                  className="w-full h-full object-contain"
+                  onLoadedData={() => console.log("Demo video loaded successfully")}
+                  onError={(e) => {
+                    console.error("Demo video error:", e);
+                    setError("Failed to load demo video");
+                  }}
+                >
+                  <source src="/demo/demo_h264.mp4" type="video/mp4" />
+                  <source src="/demo/demo.webm" type="video/webm" />
+                  Your browser does not support the video tag.
+                </video>
+              ) : isStreaming ? (
                 <img
                   src={api.getProcessedVideoStreamUrl(viewingJobId)}
                   alt="Processed video stream"
@@ -277,10 +324,10 @@ export function VideoProcessor() {
                 </video>
               )}
               {/* Streaming indicator */}
-              {isStreaming && (
+              {(isStreaming || isDemoMode) && (
                 <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 bg-black/60 rounded-full text-xs text-white backdrop-blur-md">
                   <Sparkles className="w-3 h-3 text-primary" />
-                  AI Annotated Stream
+                  {isDemoMode ? 'Demo Video' : 'AI Annotated Stream'}
                 </div>
               )}
             </div>

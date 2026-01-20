@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader, LiveIndicator } from "@/components/page-header";
 import { MotionWrapper, StaggerContainer, StaggerItem } from "@/components/motion-wrapper";
 import { CardLoader } from "@/components/page-loader";
+import { DemoBanner } from "@/components/demo-banner";
 import {
   Camera,
   Power,
@@ -19,9 +20,13 @@ import {
   Shield,
   Zap,
   Sparkles,
+  Play,
+  Pause,
 } from "lucide-react";
 import api from "@/lib/api";
 import { useWebSocket, AlertMessage } from "@/providers/websocket-provider";
+import { useDemoMode } from "@/providers/demo-context";
+import { demoLiveViolations } from "@/lib/demo-data";
 import { toast } from "sonner";
 
 // Dynamic import for VideoPlayer (heavy component with video processing)
@@ -35,14 +40,28 @@ const VideoPlayer = dynamic(
 
 export default function MonitorPage() {
   const [liveFeedEnabled, setLiveFeedEnabled] = useState(false);
+  const [demoVideoPlaying, setDemoVideoPlaying] = useState(false);
   const { lastMessage } = useWebSocket();
+  const { isDemoMode } = useDemoMode();
   const [liveViolations, setLiveViolations] = useState<AlertMessage[]>([]);
+  const demoVideoRef = useRef<HTMLVideoElement>(null);
+
+  // Initialize demo violations when in demo mode
+  useEffect(() => {
+    if (isDemoMode && liveFeedEnabled) {
+      // Add demo violations with a slight delay for effect
+      const timer = setTimeout(() => {
+        setLiveViolations(demoLiveViolations as AlertMessage[]);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [isDemoMode, liveFeedEnabled]);
 
   // Listen for new violations from WebSocket
   useEffect(() => {
     if (lastMessage && lastMessage.type === "violation") {
       setLiveViolations((prev) => [lastMessage, ...prev].slice(0, 5));
-      
+
       // Show toast notification for new violations
       toast.error(lastMessage.title, {
         description: lastMessage.message,
@@ -55,21 +74,35 @@ export default function MonitorPage() {
   const handleToggleFeed = () => {
     const newState = !liveFeedEnabled;
     setLiveFeedEnabled(newState);
-    
+
+    if (isDemoMode) {
+      setDemoVideoPlaying(newState);
+      if (demoVideoRef.current) {
+        if (newState) {
+          demoVideoRef.current.play();
+        } else {
+          demoVideoRef.current.pause();
+        }
+      }
+    }
+
     if (newState) {
-      toast.success("Live Feed Started", {
-        description: "Real-time monitoring is now active",
+      toast.success(isDemoMode ? "Demo Video Started" : "Live Feed Started", {
+        description: isDemoMode ? "Playing pre-recorded demo" : "Real-time monitoring is now active",
         icon: <Camera className="w-4 h-4" />,
       });
     } else {
-      toast.info("Live Feed Stopped", {
-        description: "Real-time monitoring has been paused",
+      toast.info(isDemoMode ? "Demo Video Paused" : "Live Feed Stopped", {
+        description: isDemoMode ? "Demo playback has been paused" : "Real-time monitoring has been paused",
       });
     }
   };
 
   return (
     <MotionWrapper className="space-y-8">
+      {/* Demo Mode Banner */}
+      <DemoBanner />
+
       {/* Header */}
       <PageHeader
         title="Live Monitor"
@@ -149,32 +182,53 @@ export default function MonitorPage() {
                   >
                     {/* Glow effect behind video */}
                     <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-transparent to-danger/20 blur-3xl opacity-50" />
-                    <img
-                      src={api.getLiveFeedUrl()}
-                      alt="Live webcam feed with real-time detection"
-                      className="relative w-full h-full object-contain bg-black"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.src =
-                          "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect fill='%231a1a1a' width='640' height='480'/%3E%3Ctext fill='%23666' x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-family='Arial' font-size='16'%3EWebcam not available%3C/text%3E%3C/svg%3E";
-                      }}
-                    />
-                    {/* Live indicator overlay */}
-                    <div className="absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 bg-black/60 text-white rounded-full text-xs backdrop-blur-md border border-white/10">
+
+                    {isDemoMode ? (
+                      /* Demo Video Player */
+                      <video
+                        ref={demoVideoRef}
+                        src="/demo/demo_annotated.mp4"
+                        className="relative w-full h-full object-contain bg-black"
+                        loop
+                        muted
+                        playsInline
+                        autoPlay
+                        onError={(e) => {
+                          // Hide video and show fallback
+                          const target = e.target as HTMLVideoElement;
+                          target.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      /* Live Feed */
+                      <img
+                        src={api.getLiveFeedUrl()}
+                        alt="Live webcam feed with real-time detection"
+                        className="relative w-full h-full object-contain bg-black"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.src =
+                            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect fill='%231a1a1a' width='640' height='480'/%3E%3Ctext fill='%23666' x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-family='Arial' font-size='16'%3EWebcam not available%3C/text%3E%3C/svg%3E";
+                        }}
+                      />
+                    )}
+
+                    {/* Live/Demo indicator overlay */}
+                    <div className={`absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 ${isDemoMode ? 'bg-info/80' : 'bg-black/60'} text-white rounded-full text-xs backdrop-blur-md border ${isDemoMode ? 'border-info/30' : 'border-white/10'}`}>
                       <span className="relative flex h-2.5 w-2.5">
                         <motion.span
                           animate={{ scale: [1, 1.5, 1], opacity: [0.75, 0, 0.75] }}
                           transition={{ duration: 1, repeat: Infinity }}
-                          className="absolute inline-flex h-full w-full rounded-full bg-red-400"
+                          className={`absolute inline-flex h-full w-full rounded-full ${isDemoMode ? 'bg-info' : 'bg-red-400'}`}
                         />
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500" />
+                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isDemoMode ? 'bg-info' : 'bg-red-500'}`} />
                       </span>
-                      LIVE
+                      {isDemoMode ? 'DEMO' : 'LIVE'}
                     </div>
                     {/* Processing indicator */}
                     <div className="absolute bottom-4 right-4 flex items-center gap-2 px-3 py-1.5 bg-black/60 text-white rounded-full text-xs backdrop-blur-md border border-white/10">
                       <Zap className="w-3 h-3 text-primary" />
-                      AI Processing
+                      {isDemoMode ? 'Pre-recorded Demo' : 'AI Processing'}
                     </div>
                   </motion.div>
                 ) : (

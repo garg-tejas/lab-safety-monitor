@@ -9,7 +9,9 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader, LastUpdated } from "@/components/page-header";
 import { MotionWrapper, StaggerContainer, StaggerItem } from "@/components/motion-wrapper";
 import { PageLoader, CardLoader } from "@/components/page-loader";
+import { DemoBanner } from "@/components/demo-banner";
 import { useDashboardData } from "@/lib/queries";
+import { useDemoMode } from "@/providers/demo-context";
 import {
   Shield,
   AlertTriangle,
@@ -41,6 +43,7 @@ const PPEBreakdownChart = dynamic(
 
 export default function DashboardPage() {
   const { stats, violations, timeline, ppeBreakdown, isLoading, isRefetching } = useDashboardData();
+  const { isDemoMode } = useDemoMode();
 
   if (isLoading) {
     return <PageLoader />;
@@ -48,6 +51,9 @@ export default function DashboardPage() {
 
   return (
     <MotionWrapper className="space-y-6">
+      {/* Demo Mode Banner */}
+      <DemoBanner />
+
       {/* Industrial Header with System Status */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}

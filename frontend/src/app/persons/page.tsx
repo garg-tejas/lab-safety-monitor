@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader, StatusBadge } from "@/components/page-header";
 import { MotionWrapper } from "@/components/motion-wrapper";
 import { PageLoader } from "@/components/page-loader";
+import { DemoBanner } from "@/components/demo-banner";
 import { usePersons } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/queries";
@@ -27,6 +28,8 @@ export default function PersonsPage() {
 
   return (
     <MotionWrapper className="space-y-8">
+      {/* Demo Mode Banner */}
+      <DemoBanner />
       {/* Header */}
       <PageHeader
         title="Persons Directory"
