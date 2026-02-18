@@ -2,85 +2,50 @@
 
 Real-time PPE compliance monitoring for laboratories and industrial spaces.
 
-SentinelVision is an event-driven video processing system that turns noisy, frame-level PPE detections into stable violation events (start / end / duration / evidence) under real-world constraints like occlusion, limited compute, and long-running streams.
+SentinelVision is an event-driven video processing system that turns noisy, frame-level PPE detections into stable violation events (`start` / `end` / `duration` / `evidence`) under real-world constraints like occlusion, limited compute, and long-running streams.
 
-The focus is stability under real-world constraints: occlusion, limited processing FPS, false positives, and long-running streams.
+## Demo
 
----
+![SentinelVision Demo](.github/assets/demo.gif)
 
-## Quick overview
+Live demo: https://lab-safety-monitor.vercel.app/
+_Note: Live demo uses pre-recorded video feeds (not webcam access)_
 
-- Problem: monitoring does not scale; per-frame alerts create noise under occlusion
-- Constraints: real-time video, limited compute, multiple people, low tolerance for false alerts
-- System loop: input (video) -> processing (detect/associate/filter) -> output (events + UI updates)
-- Trade-offs: stable event tracking over per-frame accuracy
-- Limitations: face recognition and multi-scale settings depend on image quality and GPU budget
-- Run it: see Setup and Usage
+## Problem, Constraints, and Overview
 
----
+Safety monitoring breaks down when supervision is manual or reduced to frame-by-frame alerts. Manual checks don't scale, and per-frame predictions generate alert spam under occlusion and partial visibility.
 
-## Problem
+The system must run in real time under limited compute, handle multiple people in frame, and keep false alerts low enough to be operationally useful. Under these constraints, single-frame predictions are weak signals, so the core challenge is temporal stability, not just per-frame accuracy.
 
-Safety enforcement in labs and industrial spaces breaks down when monitoring is manual, inconsistent, or reduced to frame-by-frame alerts.
+SentinelVision uses an event-driven loop: video input -> person/PPE detection and association -> temporal filtering -> deduplicated event persistence -> dashboard/live WebSocket updates. Violations are modeled as stateful events that can start, continue, and end.
 
-Common failure modes:
-- Manual monitoring does not scale and varies by operator
-- Conventional CCTV has no notion of PPE compliance
-- Per-frame PPE demos create alert spam under occlusion and partial visibility
-
----
-
-## Constraints
-
-This project assumes:
-- Real-time video input (webcam + recorded footage)
-- Limited processing budget (cannot run heavy models on every frame)
-- Frequent occlusion (hands, motion blur, partial visibility)
-- Multiple people in frame
-- Low tolerance for false alerts
-
----
-
-## Overview
-
-Pipeline (high level):
-1. Video stream (live or file)
-2. Person detection + tracking
-3. Segmentation for person masks (used for PPE-to-person association)
-4. PPE/violation detection
-5. Temporal filtering across frames
-6. Event creation + duration tracking
-7. Dashboard updates (stream + events)
-
-When a violation is detected, the system treats it as an event state that can start, continue, and end, rather than a one-off prediction. This shifts the system from frame-level prediction to a stateful, event-driven model.
-
-
----
-
-## Key design choices
+## Technical highlights (Key design choices)
 
 Hybrid detection pipeline (lower association errors):
+
 - YOLOv8 for person detection + tracking
 - SAM3 for person masks
 - YOLOv11 for PPE items and violation classes
 - Cost: more moving parts and more compute than a single model
 
 Temporal filtering (reduce alert spam):
+
 - EMA confidence fusion across frames
 - Hysteresis thresholds for starting/stopping violations
 - Subset matching during short occlusions
 - Cost: alerts can be delayed by a few frames
 
-Streaming (predictable latency):
+Streaming architecture (predictable latency):
+
 - Display FPS and ML processing FPS are decoupled
 - Frames can be cached and dropped to keep processing stable under load
-- Cost: some frames are not processed
+- Cost: some frames are intentionally not processed
 
-Event-centric storage (audit-friendly output):
+Event-centric persistence (audit-friendly output):
+
+- Deduplicated ongoing events per person/video source
 - Start frame, end frame, duration, evidence snapshot
 - Associated identity when available
-
----
 
 ## Limitations
 
@@ -88,26 +53,20 @@ Event-centric storage (audit-friendly output):
 - Multi-scale PPE detection increases GPU memory usage
 - SQLite is used for local-first development and is not intended for horizontal scaling
 
----
+## What I Learned
 
-## What this demonstrates
-
-- Designing an ML pipeline around operational constraints (not best-case inputs)
-- Reasoning about trade-offs: accuracy vs latency vs reliability
-- Running long-lived video processing with backpressure (drop/caching) instead of building a one-off demo
-- Shipping an end-to-end loop (stream -> detection -> event storage -> UI)
-
----
+- I learned to design CV pipelines around deployment constraints (latency, occlusion, compute budget), not best-case samples.
+- I improved at turning noisy detections into stable product behavior using temporal fusion, hysteresis, and event-state management.
+- I learned to build backpressure-aware streaming paths (decoupled display/process FPS + frame dropping) to keep the UI responsive under load.
+- I improved at shipping end-to-end ML systems, from inference and persistence to APIs and real-time frontend updates.
 
 ## Stack
 
-- Backend: FastAPI (async)
-- Frontend: Next.js 15, Tailwind CSS
-- ML: YOLOv8, YOLOv11 (custom), SAM3, InsightFace
-- Storage: SQLite (async)
-- Streaming: MJPEG + WebSockets
-
----
+- ML: Custom YOLOv11 PPE detector, YOLOv8, SAM3 (SAM2 fallback), InsightFace
+- Backend: FastAPI (async), SQLAlchemy, SQLite
+- Frontend: Next.js 16, React 19, Tailwind CSS 4
+- Streaming: MJPEG + WebSockets for real-time updates
+- Tooling: `uv`, `pnpm`
 
 ## Quick start
 
@@ -116,10 +75,9 @@ git clone https://github.com/garg-tejas/lab-safety-monitor.git
 cd lab-safety-monitor
 ```
 
----
-
 ## Setup
-- Prereqs: Python 3.11+, Node.js 18+ (pnpm), `uv` (CUDA GPU recommended)
+
+Prereqs: Python 3.11+, Node.js 18+ (pnpm), `uv` (CUDA GPU recommended)
 
 Backend (FastAPI):
 
@@ -139,21 +97,23 @@ pnpm dev
 ```
 
 URLs:
+
 - UI: http://localhost:3000
 - API docs: http://localhost:8000/docs
 
 Model weights:
+
 - SAM3: `backend/weights/sam3/sam3.pt`
 - YOLOv11 PPE: `backend/weights/ppe_detector/best.pt`
 - If you don't have SAM3 weights, disable SAM3 via env or download weights before running.
 
----
+**Quick troubleshooting:** If you see CUDA OOM errors, set `MULTI_SCALE_ENABLED=false` in `.env` or reduce `LIVE_STREAM_PROCESS_FPS=1`.
 
 ## Usage
 
-The API is easiest to explore via `http://localhost:8000/docs`. Examples:
+The API is easiest to explore via `http://localhost:8000/docs`.
 
-### Process a video file
+Process a video file:
 
 ```bash
 curl -X POST http://localhost:8000/api/stream/upload \
@@ -161,17 +121,15 @@ curl -X POST http://localhost:8000/api/stream/upload \
 
 curl -X POST http://localhost:8000/api/stream/process \
   -H "Content-Type: application/json" \
-  -d '{"video_path": "lab_demo.mp4", "save_output": true}'
+  -d '{"video_path": "lab_demo.mp4"}'
 ```
 
-### Start/stop live monitoring
+Start/stop live monitoring:
 
 ```bash
 curl -X POST http://localhost:8000/api/stream/live/start
 curl -X POST http://localhost:8000/api/stream/live/stop
 ```
-
----
 
 ## Project structure
 
@@ -183,11 +141,9 @@ curl -X POST http://localhost:8000/api/stream/live/stop
 - `frontend/src/components/`: UI components
 - `data/`: videos, processed outputs, snapshots
 
----
-
 ## Configuration
 
-Copy `backend/.env.example` to `backend/.env`, then adjust the relevant settings:
+Copy `backend/.env.example` to `backend/.env`, then adjust relevant settings:
 
 - `REQUIRED_PPE`
 - `DETECTION_CONFIDENCE_THRESHOLD`, `VIOLATION_CONFIDENCE_THRESHOLD`
@@ -198,125 +154,20 @@ Copy `backend/.env.example` to `backend/.env`, then adjust the relevant settings
 - `DATABASE_URL`
 - `ENABLE_SNAPSHOT_CAPTURE`, `SNAPSHOTS_DIR`
 
----
-
 ## API
 
 OpenAPI docs are available at `http://localhost:8000/docs` when the backend is running.
 
----
-
 ## ML models
 
-### Custom YOLOv11 PPE detector
-
-Trained on a lab safety dataset with 12 detection classes:
+Custom YOLOv11 PPE detector (trained with 12 classes):
 
 - PPE items: `goggles`, `mask`, `lab_coat`, `gloves`, `head_mask`
 - Violations: `no_goggles`, `no_mask`, `no_lab_coat`, `no_gloves`, `no_head_mask`
 - Actions: `drinking`, `eating`
 
-### Pre-trained Models
+Pre-trained models:
 
 - YOLOv8-medium (person detection + tracking)
 - SAM3 (segmentation), SAM2 fallback
 - InsightFace (ArcFace) for face embeddings
-
----
-
-## Troubleshooting
-
-### CUDA Out of Memory
-
-- Symptoms: `RuntimeError: CUDA out of memory`
-
-- Fixes:
-```bash
-# Option 1: Force CPU mode
-CUDA_VISIBLE_DEVICES="" uv run uvicorn app.main:app --reload
-
-# Option 2: Reduce processing scale
-# In .env: MULTI_SCALE_FACTORS=[1.0]
-
-# Option 3: Lower processing FPS
-# In .env: LIVE_STREAM_PROCESS_FPS=1
-```
-
-### No Violations Detected
-
-- Symptoms: dashboard shows 0 violations despite visible missing PPE
-
-- Fixes:
-1. Lower confidence threshold in `.env`:
-   ```env
-   VIOLATION_CONFIDENCE_THRESHOLD=0.2  # Default: 0.3
-   ```
-
-2. Enable multi-scale detection for small objects:
-   ```env
-   MULTI_SCALE_ENABLED=true
-   ```
-
-3. Verify the YOLOv11 model is loaded correctly:
-   - Check logs for `Loaded YOLOv11 PPE detector`
-   - Ensure `weights/ppe_detector/best.pt` exists
-
-4. Check required PPE configuration:
-   ```env
-   REQUIRED_PPE=["safety_goggles", "face_mask", "lab_coat"]
-   ```
-
-### Live Stream Lag / Stuttering
-
-- Symptoms: live feed freezes or has significant delay
-
-- Fixes:
-1. Reduce processing FPS (default: 3):
-   ```env
-   LIVE_STREAM_PROCESS_FPS=2  # Or even 1
-   ```
-
-2. Decrease queue size (default: 2):
-   ```env
-   LIVE_STREAM_QUEUE_SIZE=1
-   ```
-
-3. Verify GPU utilization:
-   ```bash
-   nvidia-smi
-   ```
-
-4. Disable multi-scale detection for faster processing:
-   ```env
-   MULTI_SCALE_ENABLED=false
-   ```
-
-### Frontend Not Connecting to Backend
-
-- Symptoms: dashboard shows “Connection Error” or empty data
-
-- Fixes:
-1. Verify backend is running:
-   ```bash
-   curl http://localhost:8000/docs  # Should return Swagger UI
-   ```
-
-2. Check CORS configuration in `backend/app/main.py`:
-   ```python
-   allow_origins=["http://localhost:3000"]
-   ```
-
-3. Update API URL in `frontend/.env.local`:
-   ```env
-   NEXT_PUBLIC_API_URL=http://localhost:8000
-   ```
-
----
-
-## Acknowledgments
-
-- YOLOv8/v11: Ultralytics ([https://github.com/ultralytics/ultralytics](https://github.com/ultralytics/ultralytics))
-- SAM3: Meta AI ([https://github.com/facebookresearch/sam2](https://github.com/facebookresearch/sam2))
-- InsightFace: DeepInsight ([https://github.com/deepinsight/insightface](https://github.com/deepinsight/insightface))
-- FastAPI: Sebastián Ramírez ([https://fastapi.tiangolo.com](https://fastapi.tiangolo.com))
-- Next.js: Vercel ([https://nextjs.org](https://nextjs.org))
