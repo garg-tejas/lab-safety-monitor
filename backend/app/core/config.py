@@ -1,9 +1,10 @@
 """Application settings with environment variable support."""
 
-from pydantic_settings import BaseSettings
-from pydantic import Field, model_validator
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -28,11 +29,12 @@ class Settings(BaseSettings):
     VIOLATION_CONFIDENCE_THRESHOLD: float = 0.3
     FACE_RECOGNITION_THRESHOLD: float = 0.6
 
+    # HuggingFace authentication (required for gated models like SAM3)
+    HF_TOKEN: Optional[str] = Field(default=None)
+
     # SAM3 settings
     SAM3_MODEL: str = "facebook/sam3"
-    SAM3_MODEL_ID: str = (
-        "facebook/sam2.1-hiera-tiny"  # HuggingFace model for transformers
-    )
+    SAM3_MODEL_ID: str = "facebook/sam3"  # Real SAM3 model on HuggingFace
     SAM3_MODEL_PATH: Optional[Path] = None
     USE_SAM3: bool = Field(default=True)
 
@@ -58,16 +60,22 @@ class Settings(BaseSettings):
     FRAME_SAMPLE_RATE: int = 10
     TEMPORAL_BUFFER_SIZE: int = 3
     TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
-    TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR: int = 3  # Frames without violation to clear (hysteresis)
+    TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR: int = (
+        3  # Frames without violation to clear (hysteresis)
+    )
     TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
     TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)
 
     # Live stream settings
     LIVE_STREAM_DISPLAY_FPS: int = Field(default=30)  # Display frame rate
-    LIVE_STREAM_PROCESS_FPS: int = Field(default=3)   # ML processing rate (lower = faster)
-    LIVE_STREAM_QUEUE_SIZE: int = Field(default=2)    # Max queued frames for processing
-    LIVE_STREAM_INTERPOLATE: bool = Field(default=False)  # Smooth bbox movement (optional)
+    LIVE_STREAM_PROCESS_FPS: int = Field(
+        default=3
+    )  # ML processing rate (lower = faster)
+    LIVE_STREAM_QUEUE_SIZE: int = Field(default=2)  # Max queued frames for processing
+    LIVE_STREAM_INTERPOLATE: bool = Field(
+        default=False
+    )  # Smooth bbox movement (optional)
 
     # Multi-scale detection
     MULTI_SCALE_ENABLED: bool = Field(default=True)

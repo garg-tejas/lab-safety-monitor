@@ -115,3 +115,5 @@ desktop.ini
 *.tmp
 *.temp
 .cache/
+
+sample data/

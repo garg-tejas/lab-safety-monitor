@@ -10,14 +10,15 @@ Flow:
 - Associate PPE with persons using spatial overlap
 """
 
-import numpy as np
 import logging
-from typing import Dict, List, Any, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from .person_detector import get_person_detector, PersonDetector
-from .yolov11_detector import get_yolov11_detector, YOLOv11Detector
-from .mask_utils import calculate_box_containment, calculate_mask_containment
+import numpy as np
+
 from ..core.config import settings
+from .mask_utils import calculate_box_containment, calculate_mask_containment
+from .person_detector import PersonDetector, get_person_detector
+from .yolov11_detector import YOLOv11Detector, get_yolov11_detector
 
 logger = logging.getLogger(__name__)
 
@@ -140,13 +141,13 @@ class HybridDetector:
         if not persons:
             return persons
 
-        logger.info(
+        logger.debug(
             f"[HybridDetector] _add_masks_sam3 called with {len(persons)} persons"
         )
 
         try:
             masks = self.sam3_segmenter.process_frame(frame, persons)
-            logger.info(f"[HybridDetector] SAM3 returned {len(masks)} masks")
+            logger.debug(f"[HybridDetector] SAM3 returned {len(masks)} masks")
 
             masks_assigned = 0
             for person in persons:
@@ -160,14 +161,19 @@ class HybridDetector:
                     person["mask"] = mask
                     masks_assigned += 1
                     mask_pixels = int(np.sum(mask > 0))
-                    logger.info(
+                    logger.debug(
                         f"[HybridDetector] Assigned mask to track {track_id}: {mask_pixels} pixels, shape={mask.shape}"
                     )
                 else:
                     logger.debug(f"[HybridDetector] No mask for track {track_id}")
 
+            # Always-visible summary: tells us whether real SAM3 masks landed
+            no_mask_tracks = [
+                p.get("track_id") for p in persons if p.get("mask") is None
+            ]
             logger.info(
-                f"[HybridDetector] Assigned {masks_assigned}/{len(persons)} masks from SAM3"
+                f"[HybridDetector] SAM3 masks: {masks_assigned}/{len(persons)} assigned"
+                + (f" | missing tracks: {no_mask_tracks}" if no_mask_tracks else "")
             )
 
         except Exception as e:

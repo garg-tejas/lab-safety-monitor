@@ -30,19 +30,19 @@ dependencies = [
     "ultralytics>=8.3.0",  # YOLOv8
     "insightface>=0.7.3",  # Face recognition
     "huggingface-hub>=0.26.0",
-    "transformers>=4.47.0",  # SAM3 support may require 4.57.0+ (check Hugging Face docs)
+    "transformers>=5.0.0",  # SAM3 classes (Sam3TrackerModel, Sam3TrackerVideoModel, etc.) require 5.0.0+
     "accelerate>=1.12.0",
-    "modelscope>=1.18.0",  # For downloading SAM3 model
     "sam3>=0.1.2",
     "hf-xet>=1.2.0",
+    "lap>=0.5.13",
 ]
 
-[project.optional-dependencies]
-sam2 = [
-    # SAM 2 from GitHub (installed via uv sync --extra sam2)
-    # Note: Package name in repo is 'sam-2' (with hyphen)
-    "sam-2 @ git+https://github.com/facebookresearch/sam2.git",
-]
+# [project.optional-dependencies]
+# sam2 = [
+#     # SAM 2 from GitHub (installed via uv sync --extra sam2)
+#     # Note: Package name in repo is 'sam-2' (with hyphen)
+#     "sam-2 @ git+https://github.com/facebookresearch/sam2.git",
+# ]
 
 # PyTorch CUDA configuration (CUDA 12.8)
 # This ensures torch, torchvision, and torchaudio are installed from PyTorch's CUDA wheel repository

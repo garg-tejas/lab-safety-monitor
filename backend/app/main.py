@@ -1,11 +1,48 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import logging
+import sys
 from contextlib import asynccontextmanager
 
-from .core.config import settings
-from .core.database import init_db, async_session
-from .services.person_service import PersonService
-from .ml.pipeline import get_pipeline
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+
+def configure_logging() -> None:
+    """
+    Set up logging for the application.
+
+    Strategy:
+    - Root logger: WARNING (keeps third-party noise quiet)
+    - app.*        : INFO  (our own code is fully visible)
+    - sqlalchemy.engine: WARNING — suppresses the per-query flood that
+      comes from echo=True in DEBUG mode; real DB errors still surface
+    - uvicorn.*    : leave at their own defaults
+    """
+    fmt = "%(asctime)s  %(levelname)-8s  %(name)s: %(message)s"
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(fmt, datefmt="%H:%M:%S"))
+
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    # Avoid duplicate handlers if uvicorn already added one
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        root.addHandler(handler)
+
+    # Our application code — fully visible
+    logging.getLogger("app").setLevel(logging.INFO)
+
+    # Silence SQLAlchemy per-query echo (errors/warnings still come through)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+
+    # Keep uvicorn access / error logs at their natural level
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
+
+# Configure logging before any application imports so that loggers
+# created during module-level initialisation pick up the right level.
+configure_logging()
+
 from .api.routes import (
     events_router,
     persons_router,
@@ -13,6 +50,10 @@ from .api.routes import (
     stream_router,
     ws_router,
 )
+from .core.config import settings
+from .core.database import async_session, init_db
+from .ml.pipeline import get_pipeline
+from .services.person_service import PersonService
 
 
 @asynccontextmanager
@@ -52,13 +93,37 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# In debug mode, allow common development origins
+# In production, use specific origins from settings
+if settings.DEBUG:
+    # Allow common development ports and origins
+    debug_origins = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ] + settings.CORS_ORIGINS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=debug_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
 
 # Include routers
 app.include_router(events_router, prefix="/api")
