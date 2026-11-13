@@ -1,390 +1,72 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { motion, AnimatePresence } from "framer-motion";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
+import { ArrowUpRight, Camera, Pause, Play, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PageHeader, LiveIndicator } from "@/components/page-header";
-import { MotionWrapper, StaggerContainer, StaggerItem } from "@/components/motion-wrapper";
 import { CardLoader } from "@/components/page-loader";
 import { DemoBanner } from "@/components/demo-banner";
-import {
-  Camera,
-  Power,
-  PowerOff,
-  AlertTriangle,
-  Clock,
-  Radio,
-  Shield,
-  Zap,
-  Sparkles,
-  Play,
-  Pause,
-} from "lucide-react";
+import { EventLedger } from "@/components/event-ledger";
 import api from "@/lib/api";
 import { useWebSocket, AlertMessage } from "@/providers/websocket-provider";
 import { useDemoMode } from "@/providers/demo-context";
 import { demoLiveViolations } from "@/lib/demo-data";
-import { toast } from "sonner";
 
-// Dynamic import for VideoPlayer (heavy component with video processing)
-const VideoPlayer = dynamic(
-  () => import("@/components/video-player").then((m) => ({ default: m.VideoPlayer })),
-  {
-    loading: () => <CardLoader />,
-    ssr: false,
-  }
-);
+const VideoPlayer = dynamic(() => import("@/components/video-player").then((m) => m.VideoPlayer), { loading: () => <CardLoader />, ssr: false });
 
 export default function MonitorPage() {
-  const [liveFeedEnabled, setLiveFeedEnabled] = useState(false);
-  const [demoVideoPlaying, setDemoVideoPlaying] = useState(false);
-  const { lastMessage } = useWebSocket();
   const { isDemoMode } = useDemoMode();
-  const [liveViolations, setLiveViolations] = useState<AlertMessage[]>([]);
+  const { recentAlerts, isConnected } = useWebSocket();
+  const source = isDemoMode ? "demo" : "live";
+  const [feed, setFeed] = useState<{ source: string; enabled: boolean; startedAt: number }>({ source: "demo", enabled: false, startedAt: 0 });
+  const feedEnabled = feed.enabled && feed.source === source;
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [feedReceived, setFeedReceived] = useState(false);
   const demoVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Initialize demo violations when in demo mode
-  useEffect(() => {
-    if (isDemoMode && liveFeedEnabled) {
-      // Add demo violations with a slight delay for effect
-      const timer = setTimeout(() => {
-        setLiveViolations(demoLiveViolations as AlertMessage[]);
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [isDemoMode, liveFeedEnabled]);
-
-  // Listen for new violations from WebSocket
-  useEffect(() => {
-    if (lastMessage && lastMessage.type === "violation") {
-      setLiveViolations((prev) => [lastMessage, ...prev].slice(0, 5));
-
-      // Show toast notification for new violations
-      toast.error(lastMessage.title, {
-        description: lastMessage.message,
-        icon: <AlertTriangle className="w-4 h-4" />,
-        duration: 5000,
-      });
-    }
-  }, [lastMessage]);
-
-  const handleToggleFeed = () => {
-    const newState = !liveFeedEnabled;
-    setLiveFeedEnabled(newState);
-
-    if (isDemoMode) {
-      setDemoVideoPlaying(newState);
-      if (demoVideoRef.current) {
-        if (newState) {
-          demoVideoRef.current.play();
-        } else {
-          demoVideoRef.current.pause();
-        }
-      }
-    }
-
-    if (newState) {
-      toast.success(isDemoMode ? "Demo Video Started" : "Live Feed Started", {
-        description: isDemoMode ? "Playing pre-recorded demo" : "Real-time monitoring is now active",
-        icon: <Camera className="w-4 h-4" />,
-      });
-    } else {
-      toast.info(isDemoMode ? "Demo Video Paused" : "Live Feed Stopped", {
-        description: isDemoMode ? "Demo playback has been paused" : "Real-time monitoring has been paused",
-      });
+  const toggleFeed = () => {
+    setStreamError(null);
+    setFeedReceived(false);
+    setFeed({ source, enabled: !feedEnabled, startedAt: Date.now() });
+    if (feedEnabled) {
+      demoVideoRef.current?.pause();
     }
   };
 
+  const violations: AlertMessage[] = !feedEnabled ? [] : isDemoMode ? demoLiveViolations : recentAlerts.filter((alert) => alert.receivedAt >= feed.startedAt).slice(0, 5).map((alert) => alert.message);
+  const status = !feedEnabled ? "Standby" : streamError ? "Feed unavailable" : isDemoMode ? "Prerecorded playback" : feedReceived ? "Camera feed received" : "Connecting to camera";
+
   return (
-    <MotionWrapper className="space-y-8">
-      {/* Demo Mode Banner */}
+    <div>
       <DemoBanner />
-
-      {/* Header */}
-      <PageHeader
-        title="Live Monitor"
-        description="Real-time safety monitoring and video processing"
-        action={
-          <AnimatePresence>
-            {liveFeedEnabled && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.8 }}
-              >
-                <LiveIndicator label="Live Stream Active" />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        }
-      />
-
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        <motion.div
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.2 }}
-          className="space-y-6"
-        >
-          {/* Live Feed Card */}
-          <Card variant="glass" hover glow={liveFeedEnabled ? "primary" : null}>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-3">
-                  <motion.div
-                    animate={liveFeedEnabled ? { scale: [1, 1.1, 1] } : {}}
-                    transition={{ duration: 2, repeat: Infinity }}
-                    className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary/10"
-                  >
-                    <Camera className="w-5 h-5 text-primary" />
-                  </motion.div>
-                  <div>
-                    <span>Live Webcam Feed</span>
-                    <p className="text-xs font-normal text-muted-foreground mt-0.5">
-                      Real-time detection and analysis
-                    </p>
-                  </div>
-                </CardTitle>
-                <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                  <Button
-                    variant={liveFeedEnabled ? "destructive" : "default"}
-                    size="sm"
-                    onClick={handleToggleFeed}
-                    className="flex items-center gap-2 shadow-lg"
-                  >
-                    {liveFeedEnabled ? (
-                      <>
-                        <PowerOff className="w-4 h-4" />
-                        Stop Feed
-                      </>
-                    ) : (
-                      <>
-                        <Power className="w-4 h-4" />
-                        Start Feed
-                      </>
-                    )}
-                  </Button>
-                </motion.div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <AnimatePresence mode="wait">
-                {liveFeedEnabled ? (
-                  <motion.div
-                    key="live"
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="relative aspect-video rounded-xl overflow-hidden border border-border/50 shadow-2xl"
-                  >
-                    {/* Glow effect behind video */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-transparent to-danger/20 blur-3xl opacity-50" />
-
-                    {isDemoMode ? (
-                      /* Demo Video Player */
-                      <video
-                        ref={demoVideoRef}
-                        src="/demo/demo_annotated.mp4"
-                        className="relative w-full h-full object-contain bg-black"
-                        loop
-                        muted
-                        playsInline
-                        autoPlay
-                        onError={(e) => {
-                          // Hide video and show fallback
-                          const target = e.target as HTMLVideoElement;
-                          target.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      /* Live Feed */
-                      <img
-                        src={api.getLiveFeedUrl()}
-                        alt="Live webcam feed with real-time detection"
-                        className="relative w-full h-full object-contain bg-black"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.src =
-                            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='480'%3E%3Crect fill='%231a1a1a' width='640' height='480'/%3E%3Ctext fill='%23666' x='50%25' y='50%25' text-anchor='middle' dy='.3em' font-family='Arial' font-size='16'%3EWebcam not available%3C/text%3E%3C/svg%3E";
-                        }}
-                      />
-                    )}
-
-                    {/* Live/Demo indicator overlay */}
-                    <div className={`absolute top-4 left-4 flex items-center gap-2 px-3 py-1.5 ${isDemoMode ? 'bg-info/80' : 'bg-black/60'} text-white rounded-full text-xs backdrop-blur-md border ${isDemoMode ? 'border-info/30' : 'border-white/10'}`}>
-                      <span className="relative flex h-2.5 w-2.5">
-                        <motion.span
-                          animate={{ scale: [1, 1.5, 1], opacity: [0.75, 0, 0.75] }}
-                          transition={{ duration: 1, repeat: Infinity }}
-                          className={`absolute inline-flex h-full w-full rounded-full ${isDemoMode ? 'bg-info' : 'bg-red-400'}`}
-                        />
-                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isDemoMode ? 'bg-info' : 'bg-red-500'}`} />
-                      </span>
-                      {isDemoMode ? 'DEMO' : 'LIVE'}
-                    </div>
-                    {/* Processing indicator */}
-                    <div className="absolute bottom-4 right-4 flex items-center gap-2 px-3 py-1.5 bg-black/60 text-white rounded-full text-xs backdrop-blur-md border border-white/10">
-                      <Zap className="w-3 h-3 text-primary" />
-                      {isDemoMode ? 'Pre-recorded Demo' : 'AI Processing'}
-                    </div>
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="placeholder"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="relative aspect-video rounded-xl overflow-hidden bg-muted/30 border-2 border-dashed border-border flex items-center justify-center"
-                  >
-                    <div className="text-center">
-                      <motion.div
-                        animate={{ y: [0, -5, 0] }}
-                        transition={{ duration: 2, repeat: Infinity }}
-                        className="flex items-center justify-center w-16 h-16 rounded-2xl bg-muted mx-auto mb-4"
-                      >
-                        <Camera className="w-8 h-8 text-muted-foreground opacity-50" />
-                      </motion.div>
-                      <p className="font-medium text-foreground">
-                        Live feed is disabled
-                      </p>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Click &quot;Start Feed&quot; to enable real-time monitoring
-                      </p>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </CardContent>
-          </Card>
-
-          {/* Recent Live Violations Card */}
-          <Card variant="glass" hover glow={liveViolations.length > 0 ? "danger" : null}>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-3">
-                <div className="relative">
-                  <motion.div
-                    animate={liveViolations.length > 0 ? { scale: [1, 1.1, 1] } : {}}
-                    transition={{ duration: 1.5, repeat: Infinity }}
-                    className="flex items-center justify-center w-10 h-10 rounded-xl bg-danger/10"
-                  >
-                    <AlertTriangle className="w-5 h-5 text-danger" />
-                  </motion.div>
-                  <AnimatePresence>
-                    {liveViolations.length > 0 && (
-                      <motion.span
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        exit={{ scale: 0 }}
-                        className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-danger text-[10px] font-bold text-white"
-                      >
-                        {liveViolations.length}
-                      </motion.span>
-                    )}
-                  </AnimatePresence>
-                </div>
-                <div>
-                  <span>Live Violations Feed</span>
-                  <p className="text-xs font-normal text-muted-foreground mt-0.5">
-                    Real-time safety alerts via WebSocket
-                  </p>
-                </div>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <AnimatePresence mode="popLayout">
-                {liveViolations.length > 0 ? (
-                  <StaggerContainer className="space-y-3">
-                    {liveViolations.map((violation, index) => (
-                      <StaggerItem key={`${violation.timestamp}-${index}`}>
-                        <motion.div
-                          layout
-                          initial={{ opacity: 0, x: -20, height: 0 }}
-                          animate={{ opacity: 1, x: 0, height: "auto" }}
-                          exit={{ opacity: 0, x: 20, height: 0 }}
-                          whileHover={{ x: 4 }}
-                          className="flex items-start gap-4 p-4 rounded-xl bg-gradient-to-r from-danger/10 to-transparent border border-danger/20 hover:border-danger/30 transition-all duration-200"
-                        >
-                          <motion.div
-                            animate={{ rotate: [0, -5, 5, 0] }}
-                            transition={{ duration: 0.5, delay: index * 0.1 }}
-                            className="p-2.5 bg-danger/10 rounded-xl shrink-0"
-                          >
-                            <AlertTriangle className="w-4 h-4 text-danger" />
-                          </motion.div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-medium text-sm text-foreground">
-                                {violation.title}
-                              </h4>
-                              <Badge variant="danger" className="text-[10px]">
-                                {violation.severity}
-                              </Badge>
-                            </div>
-                            <p className="text-sm text-muted-foreground mt-1">
-                              {violation.message}
-                            </p>
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                              {violation.missing_ppe?.map((ppe) => (
-                                <Badge
-                                  key={ppe}
-                                  variant="danger-soft"
-                                  className="text-[10px]"
-                                >
-                                  {ppe}
-                                </Badge>
-                              ))}
-                            </div>
-                            <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
-                              <Clock className="w-3 h-3" />
-                              <span>
-                                {new Date(violation.timestamp).toLocaleTimeString()}
-                              </span>
-                            </div>
-                          </div>
-                        </motion.div>
-                      </StaggerItem>
-                    ))}
-                  </StaggerContainer>
-                ) : (
-                  <motion.div
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="flex flex-col items-center justify-center py-16 text-center border-2 border-dashed border-border rounded-xl bg-muted/10"
-                  >
-                    <motion.div
-                      animate={{ y: [0, -5, 0] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="flex items-center justify-center w-16 h-16 rounded-2xl bg-success/10 mb-4"
-                    >
-                      <Shield className="w-8 h-8 text-success" />
-                    </motion.div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Sparkles className="w-4 h-4 text-success" />
-                      <p className="font-medium text-foreground">No active violations</p>
-                      <Sparkles className="w-4 h-4 text-success" />
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Real-time safety alerts will appear here
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ delay: 0.3 }}
-          className="space-y-6"
-        >
-          <VideoPlayer />
-        </motion.div>
+      <header className="console-header">
+        <div><span className="console-eyebrow">Observation / 02</span><h1>Keep the scene in view.</h1><p>Inspect a feed, follow reported safety events, and review recorded video in one workspace.</p></div>
+        <div className="console-header-aside"><span className="console-source-tag"><i className="console-dot" />{isDemoMode ? "DEMO SOURCE" : "CAMERA SOURCE"}</span><Link href="/events" className="console-link">Event ledger <ArrowUpRight size={15} /></Link></div>
+      </header>
+      <div className="console-monitor-grid">
+        <section className="console-panel" aria-label="Video observation">
+          <div className="console-panel-heading"><div><h2>{isDemoMode ? "Recorded laboratory scene" : "Laboratory camera"}</h2><p>{isDemoMode ? "LOCAL VIDEO / DEMO_H264.MP4" : "BACKEND CAMERA STREAM"}</p></div><span className="console-source-tag">{status}</span></div>
+          <div className="console-feed">
+            {feedEnabled && !streamError ? <>
+              {isDemoMode ? <video key={source} ref={demoVideoRef} autoPlay loop muted playsInline controls aria-label="Prerecorded laboratory demonstration" onLoadedData={() => setFeedReceived(true)} onError={() => setStreamError("The prerecorded video could not be loaded. No live camera is running.")}>
+                <source src="/demo/demo_h264.mp4" type="video/mp4" /><source src="/demo/demo.webm" type="video/webm" />
+              </video> : <img src={api.getLiveFeedUrl()} alt="Camera stream from the connected backend" onLoad={() => setFeedReceived(true)} onError={() => setStreamError("The camera stream is unavailable. Check the backend, camera access, and model readiness.")} />}
+              <div className="console-feed-label"><i className="console-dot" />{isDemoMode ? "DEMONSTRATION / PRERECORDED" : "CAMERA STREAM"}</div>
+            </> : <div className="console-feed-empty"><Camera size={38} strokeWidth={1} /><strong>{streamError ? "Feed unavailable" : "Ready when you are."}</strong><p>{streamError || (isDemoMode ? "Play the local recording to explore this console. Events are simulated and are not synchronized annotations of this clip." : "Start the camera stream when the backend and its models are ready. No feed is running yet.")}</p>{!feedEnabled && <Button onClick={toggleFeed} size="sm"><Play size={14} />{isDemoMode ? "Play demonstration" : "Start camera feed"}</Button>}</div>}
+          </div>
+          <div className="console-feed-controls"><p>{isDemoMode ? "DEMO / SIMULATED EVENTS / NO LIVE INFERENCE" : `ALERT CHANNEL / ${isConnected ? "CONNECTED" : "DISCONNECTED"}`}</p><Button onClick={toggleFeed} variant={feedEnabled ? "outline" : "default"} size="sm">{feedEnabled ? <Pause size={14} /> : <Play size={14} />}{feedEnabled ? "Stop feed" : isDemoMode ? "Play recording" : "Start feed"}</Button></div>
+          {streamError && <p className="console-stream-error" role="alert">{streamError}</p>}
+        </section>
+        <EventLedger title="Event timeline" demonstration={isDemoMode} events={violations.map((event, index) => ({ id: `${event.timestamp}-${index}`, timestamp: event.timestamp, person: event.person_id || event.title, description: event.message, missingPpe: event.missing_ppe || [] }))} emptyMessage={isDemoMode ? "Start the demonstration to inspect sample events. These are simulated records, independent of video playback." : "No alerts received in this session. This does not establish that the scene is safe."} footer={isDemoMode ? "Sample events are independent of the recording timeline." : "Most recent five alerts received while this feed is enabled."} />
       </div>
-    </MotionWrapper>
+      <div className="console-monitor-notes">
+        <div><span>01 / VIDEO SOURCE</span><p>{isDemoMode ? "Local prerecorded footage" : "Backend camera stream"}</p></div>
+        <div><span>02 / EVENT SOURCE</span><p>{isDemoMode ? "Simulated demonstration records" : isConnected ? "WebSocket connected" : "WebSocket disconnected"}</p></div>
+        <div><span>03 / REVIEW</span><p>Confirm the scene before acting.</p></div>
+      </div>
+      <div className="console-section-heading"><div><h2>Recorded video workspace</h2><p>Upload, process, and inspect saved recordings. Demo mode keeps processing disabled.</p></div><Radio size={19} strokeWidth={1.4} className="text-muted-foreground" /></div>
+      <VideoPlayer key={source} />
+    </div>
   );
 }

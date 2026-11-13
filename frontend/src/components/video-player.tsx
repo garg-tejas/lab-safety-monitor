@@ -4,8 +4,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Upload,
   Play,
@@ -40,28 +38,20 @@ export function VideoProcessor() {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const fetchVideos = useCallback(async () => {
-    if (isDemoMode) {
-      setVideos(demoVideos);
-      return;
-    }
     try {
-      const result = await api.getUploadedVideos();
-      setVideos(result.videos);
+      const result = isDemoMode ? await Promise.resolve(demoVideos) : (await api.getUploadedVideos()).videos;
+      setVideos(result);
     } catch (err) {
       console.error("Failed to fetch videos:", err);
     }
   }, [isDemoMode]);
 
   const fetchJobs = useCallback(async () => {
-    if (isDemoMode) {
-      setJobs(demoProcessingJobs);
-      return;
-    }
     try {
-      const result = await api.getProcessingJobs();
-      setJobs(result.jobs);
+      const result = isDemoMode ? await Promise.resolve(demoProcessingJobs) : (await api.getProcessingJobs()).jobs;
+      setJobs(result);
 
-      const hasActiveJobs = result.jobs.some((j) => j.status === "processing");
+      const hasActiveJobs = result.some((j) => j.status === "processing");
       if (!hasActiveJobs && pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
@@ -80,6 +70,8 @@ export function VideoProcessor() {
   }, [fetchJobs, isDemoMode]);
 
   useEffect(() => {
+    // Fetch functions resolve before publishing their external records; this is not derived render state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchVideos();
     fetchJobs();
 
@@ -224,7 +216,7 @@ export function VideoProcessor() {
             <Film className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <span>Video Analysis</span>
+            <span>Recording library</span>
             <p className="text-xs font-normal text-muted-foreground mt-0.5">
               Upload and process videos for safety analysis
             </p>
@@ -234,6 +226,7 @@ export function VideoProcessor() {
           variant="ghost"
           size="icon"
           onClick={() => { fetchVideos(); fetchJobs(); }}
+          aria-label="Refresh recording library"
           className="h-8 w-8"
         >
           <RefreshCw className="w-4 h-4" />
@@ -268,6 +261,7 @@ export function VideoProcessor() {
                   variant="ghost"
                   className="h-8 w-8"
                   onClick={() => handleDownloadProcessed(viewingJobId)}
+                  aria-label="Download processed recording"
                 >
                   <Download className="w-4 h-4" />
                 </Button>
@@ -276,6 +270,7 @@ export function VideoProcessor() {
                   variant="ghost"
                   className="h-8 w-8"
                   onClick={handleCloseViewer}
+                  aria-label="Close recording viewer"
                 >
                   <X className="w-4 h-4" />
                 </Button>
@@ -355,11 +350,12 @@ export function VideoProcessor() {
             accept="video/mp4,video/avi,video/mov,video/mkv,video/webm"
             onChange={handleFileSelect}
             className="hidden"
-            disabled={isUploading}
+            disabled={isUploading || isDemoMode}
           />
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
+            disabled={isUploading || isDemoMode}
+            title={isDemoMode ? "Upload is disabled in demonstration mode" : "Select a recording"}
             className={cn(
               "w-full py-8 border-2 border-dashed rounded-xl transition-all duration-200",
               "flex flex-col items-center justify-center gap-3",
@@ -384,9 +380,9 @@ export function VideoProcessor() {
                   <Upload className="w-6 h-6 text-primary" />
                 </div>
                 <div className="text-center">
-                  <p className="font-medium">Upload Video</p>
+                  <p className="font-medium">{isDemoMode ? "Upload disabled in demonstration" : "Upload video"}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Drag and drop or click to select a video file
+                    {isDemoMode ? "Connect to a backend to upload your own recording" : "Click to select a video file"}
                   </p>
                 </div>
               </>
@@ -520,7 +516,7 @@ export function VideoProcessor() {
                       <Button
                         size="sm"
                         onClick={() => handleProcess(video.path)}
-                        disabled={isProcessing}
+                        disabled={isProcessing || isDemoMode}
                         className="shadow-lg"
                       >
                         <Play className="w-4 h-4 mr-1.5" />
@@ -531,7 +527,8 @@ export function VideoProcessor() {
                       size="icon-sm"
                       variant="ghost"
                       onClick={() => handleDelete(video.filename)}
-                      disabled={isProcessing}
+                      aria-label={`Delete ${video.filename}`}
+                      disabled={isProcessing || isDemoMode}
                       className="h-8 w-8 text-muted-foreground hover:text-danger hover:bg-danger/10"
                     >
                       <Trash2 className="w-4 h-4" />

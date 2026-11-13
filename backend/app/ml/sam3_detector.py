@@ -16,6 +16,7 @@ import logging
 from PIL import Image
 from typing import Dict, List, Any, Optional
 from ..core.config import settings
+from ..core.model_status import ModelUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,8 @@ class SAM3Detector:
     - Improved logging
     """
 
-    def __init__(self):
+    def __init__(self, mock_mode: bool = False):
+        self.mock_mode = mock_mode
         self.model = None
         self.processor = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -42,9 +44,13 @@ class SAM3Detector:
         self.confidence_threshold = settings.DETECTION_CONFIDENCE_THRESHOLD
         self._initialized = False
         self._model_available = False
+        self.last_error = None
 
     def initialize(self):
         """Lazy initialization of SAM 3 model from Hugging Face."""
+        if self.mock_mode:
+            self._initialized = True
+            return
         if self._initialized:
             return
 
@@ -62,19 +68,15 @@ class SAM3Detector:
             self._initialized = True
 
             logger.info(f"SAM 3 model loaded successfully on {self.device} with dtype={self.dtype}")
+            self.last_error = None
             print(f"SAM 3 model loaded successfully! Device: {self.device}, dtype: {self.dtype}")
-        except ImportError as e:
-            logger.error(f"SAM 3 (Transformers) not available: {e}")
-            print(f"SAM 3 (Transformers) not available: {e}")
-            print("Falling back to mock detector for development")
-            self._model_available = False
-            self._initialized = True  # Use mock mode
         except Exception as e:
             logger.error(f"Failed to load SAM 3 model: {e}")
-            print(f"Failed to load SAM 3 model: {e}")
-            print("Falling back to mock detector for development")
+            self.model = self.processor = None
             self._model_available = False
-            self._initialized = True  # Use mock mode
+            self._initialized = False
+            self.last_error = "SAM3 unavailable. Check Transformers dependencies, model access, and weights. No detections were produced."
+            raise ModelUnavailableError(self.last_error) from e
 
     def detect(self, frame: np.ndarray) -> Dict[str, Any]:
         """
@@ -86,8 +88,12 @@ class SAM3Detector:
         Returns:
             Dict with detected PPE items, their masks, boxes, and scores
         """
+        if self.mock_mode:
+            return self._mock_detect(frame)
         if not self._initialized:
             self.initialize()
+        if not self._model_available or self.model is None:
+            raise ModelUnavailableError(self.last_error or "SAM3 model is unavailable; no detections were produced.")
 
         # Convert BGR to RGB PIL Image
         if isinstance(frame, np.ndarray):
@@ -103,10 +109,6 @@ class SAM3Detector:
             if isinstance(frame, np.ndarray)
             else image.size[::-1],
         }
-
-        if not self._model_available:
-            # Mock mode for development
-            return self._mock_detect(frame)
 
         try:
             # Detect persons using text prompt with bfloat16
@@ -195,10 +197,8 @@ class SAM3Detector:
 
         except Exception as e:
             logger.error(f"SAM 3 detection error: {e}")
-            print(f"SAM 3 detection error: {e}")
-            import traceback
-            traceback.print_exc()
-            return self._mock_detect(frame)
+            self.last_error = "SAM3 inference failed. Check model configuration and runtime resources. No detections were produced."
+            raise ModelUnavailableError(self.last_error) from e
 
         return results
 
@@ -207,6 +207,8 @@ class SAM3Detector:
         h, w = frame.shape[:2] if isinstance(frame, np.ndarray) else (480, 640)
 
         return {
+            "inference_mode": "mock",
+            "simulated": True,
             "persons": [
                 {"id": 0, "box": [100, 50, 300, 400], "score": 0.95, "mask": None}
             ],
@@ -221,7 +223,8 @@ class SAM3Detector:
         }
 
     def associate_ppe_to_persons(
-        self, persons: List[Dict], ppe_detections: Dict[str, List[Dict]]
+        self, persons: List[Dict], ppe_detections: Dict[str, List[Dict]],
+        violation_detections=None, action_violations=None,
     ) -> List[Dict]:
         """
         Associate detected PPE items with persons based on spatial overlap.

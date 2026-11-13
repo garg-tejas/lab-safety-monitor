@@ -35,6 +35,8 @@ dependencies = [
     "sam3>=0.1.2",
     "hf-xet>=1.2.0",
     "lap>=0.5.13",
+    "pygrabber>=0.2",
+    "certifi>=2026.10.19",
 ]
 
 # [project.optional-dependencies]
@@ -60,3 +62,6 @@ torchaudio = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys
 
 # Alternative: If specific versions are needed, you can also try:
 # torch = ">=2.5.1,<2.10"  # Let uv find a compatible CUDA 12.8 version
+
+[tool.uv]
+required-version = ">=0.13.4"

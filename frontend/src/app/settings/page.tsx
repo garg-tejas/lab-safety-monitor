@@ -71,7 +71,10 @@ function SettingToggle({ label, description, enabled, onChange, icon }: SettingT
       <motion.button
         whileTap={{ scale: 0.95 }}
         onClick={() => onChange(!enabled)}
-        className={`relative w-12 h-7 rounded-full transition-colors duration-200 ${enabled ? "bg-primary" : "bg-muted"
+        role="switch"
+        aria-checked={enabled}
+        aria-label={label}
+        className={`relative w-12 h-7 shrink-0 rounded-full transition-colors duration-200 ${enabled ? "bg-primary" : "bg-muted"
           }`}
       >
         <motion.div

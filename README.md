@@ -1,5 +1,7 @@
 # SentinelVision
 
+Offline event scoring for a future temporal-filter ablation is documented in [backend/eval/README.md](backend/eval/README.md). It evaluates saved intervals with one-to-one event matching, explicit cohort/provenance, false alerts per minute and signed onset differences. Only synthetic fixture tests have been run; this is not a new detector benchmark result.
+
 Real-time PPE compliance monitoring for laboratories and industrial spaces.
 
 SentinelVision is an event-driven video processing system that turns noisy, frame-level PPE detections into stable violation events (`start` / `end` / `duration` / `evidence`) under real-world constraints like occlusion, limited compute, and long-running streams.
@@ -48,6 +50,19 @@ Event-centric persistence (audit-friendly output):
 - Associated identity when available
 
 ## Limitations
+
+### Inference availability and demo mode
+
+Real detector modes fail explicitly when required models cannot load or inference fails. SAM3, YOLOv11 PPE, and InsightFace never substitute mock detections or embeddings after an error. `/health` exposes pipeline readiness, inference mode, and an actionable error; video jobs become `failed` on model errors and webcam startup returns HTTP 503. Live processing clears stale detections and shows an unavailable overlay after errors.
+
+For an intentional backend demo, set `DETECTOR_TYPE=mock` or `USE_MOCK_DETECTOR=true`. Mock frames are watermarked and carry `simulated: true` / `inference_mode: mock`; simulated people and violation events are not persisted. `USE_MOCK_FACE=true` explicitly selects labeled face simulations. The prerecorded frontend demo remains a separate simulation, not a model benchmark. Restore real settings and restart the backend before validating actual inference.
+
+Lightweight failure-boundary tests (stubs only; no model loading or inference):
+
+```bash
+cd backend
+python -m unittest discover -s tests -v
+```
 
 - Face recognition degrades under heavy occlusion or low resolution
 - Multi-scale PPE detection increases GPU memory usage

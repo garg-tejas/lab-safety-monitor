@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Set
 import numpy as np
 
 from ..core.config import settings
+from ..core.model_status import ModelUnavailableError
 from .mask_utils import calculate_box_containment, calculate_mask_containment
 from .person_detector import PersonDetector, get_person_detector
 from .yolov11_detector import YOLOv11Detector, get_yolov11_detector
@@ -71,7 +72,7 @@ class HybridDetector:
         self.ppe_detector.initialize()
 
         if self.ppe_detector.model is None:
-            logger.error("YOLOv11 model failed to load - PPE detection disabled")
+            raise ModelUnavailableError("Hybrid PPE detector is unavailable; no compliance decisions can be produced.")
 
         if self._use_sam3:
             try:

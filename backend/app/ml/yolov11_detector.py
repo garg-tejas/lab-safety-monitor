@@ -13,6 +13,7 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from ..core.config import settings
+from ..core.model_status import ModelUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class YOLOv11Detector:
             settings, "VIOLATION_CONFIDENCE_THRESHOLD", 0.3
         )
         self._initialized = False
+        self.last_error = None
 
         self.multi_scale_enabled = getattr(settings, "MULTI_SCALE_ENABLED", True)
         self.multi_scale_factors = getattr(
@@ -86,15 +88,11 @@ class YOLOv11Detector:
 
         model_path = settings.YOLOV11_MODEL_PATH
         if not model_path:
-            logger.warning("YOLOV11_MODEL_PATH not set - using mock detector")
-            self._initialized = True
-            return
+            raise ModelUnavailableError("YOLOV11_MODEL_PATH is not configured. Set local PPE weights before processing.")
 
         model_path = Path(model_path)
         if not model_path.exists():
-            logger.warning(f"YOLOv11 model not found at {model_path}")
-            self._initialized = True
-            return
+            raise ModelUnavailableError("YOLOv11 PPE weights were not found. Check YOLOV11_MODEL_PATH before processing.")
 
         try:
             if model_path.suffix == ".onnx":
@@ -104,6 +102,7 @@ class YOLOv11Detector:
 
             self._initialized = True
             logger.info(f"YOLOv11 loaded: {model_path.name} ({self.model_type})")
+            self.last_error = None
             if self.multi_scale_enabled:
                 logger.info(
                     f"Multi-scale detection enabled: {self.multi_scale_factors}"
@@ -111,7 +110,10 @@ class YOLOv11Detector:
 
         except Exception as e:
             logger.error(f"YOLOv11 loading failed: {e}")
-            self._initialized = True
+            self.model = None
+            self._initialized = False
+            self.last_error = "YOLOv11 could not load. Check local PPE weights and runtime dependencies. No detections were produced."
+            raise ModelUnavailableError(self.last_error) from e
 
     def _load_pytorch_model(self, model_path: Path):
         from ultralytics import YOLO
@@ -149,7 +151,7 @@ class YOLOv11Detector:
         }
 
         if self.model is None:
-            return self._mock_detect(frame)
+            raise ModelUnavailableError(self.last_error or "YOLOv11 PPE model unavailable; no detections were produced.")
 
         try:
             if self.model_type == "pytorch":
@@ -168,7 +170,8 @@ class YOLOv11Detector:
 
         except Exception as e:
             logger.error(f"YOLOv11 detection error: {e}")
-            return self._mock_detect(frame)
+            self.last_error = "YOLOv11 inference failed. Check model configuration and runtime resources. No detections were produced."
+            raise ModelUnavailableError(self.last_error) from e
 
         return results
 

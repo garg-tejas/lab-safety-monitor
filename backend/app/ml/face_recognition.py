@@ -7,6 +7,8 @@ Provides face detection and embedding extraction for person re-identification.
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 import pickle
+from ..core.config import settings
+from ..core.model_status import ModelUnavailableError
 
 
 class FaceRecognizer:
@@ -16,13 +18,18 @@ class FaceRecognizer:
     Uses RetinaFace for detection and ArcFace for embeddings.
     """
 
-    def __init__(self, threshold: float = 0.6):
+    def __init__(self, threshold: float = 0.6, mock_mode: bool = False):
+        self.mock_mode = mock_mode
+        self.last_error = None
         self.app = None
         self.threshold = threshold
         self._initialized = False
 
     def initialize(self):
         """Lazy initialization of InsightFace."""
+        if self.mock_mode:
+            self._initialized = True
+            return
         if self._initialized:
             return
 
@@ -37,9 +44,12 @@ class FaceRecognizer:
             self.app.prepare(ctx_id=0, det_size=(640, 640))
             self._initialized = True
             print("InsightFace loaded successfully!")
+            self.last_error = None
         except Exception as e:
-            print(f"InsightFace not available: {e}")
-            self._initialized = True  # Use mock mode
+            self.app = None
+            self._initialized = False
+            self.last_error = "Face recognition unavailable. Check InsightFace dependencies and weights. No identities were inferred."
+            raise ModelUnavailableError(self.last_error) from e
 
     def detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
@@ -51,11 +61,13 @@ class FaceRecognizer:
         Returns:
             List of face detections with boxes and embeddings
         """
+        if self.mock_mode:
+            return self._mock_detect(frame)
         if not self._initialized:
             self.initialize()
 
         if self.app is None:
-            return self._mock_detect(frame)
+            raise ModelUnavailableError(self.last_error or "Face recognition model is unavailable; no identities were inferred.")
 
         try:
             faces = self.app.get(frame)
@@ -75,13 +87,15 @@ class FaceRecognizer:
 
             return results
         except Exception as e:
-            print(f"Face detection error: {e}")
-            return []
+            self.last_error = "Face recognition inference failed. No identities were inferred."
+            raise ModelUnavailableError(self.last_error) from e
 
     def _mock_detect(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """Mock face detection for development."""
         return [
             {
+                "simulated": True,
+                "inference_mode": "mock",
                 "box": [150, 80, 250, 200],
                 "embedding": np.random.randn(512).astype(np.float32),
                 "score": 0.98,
@@ -159,5 +173,5 @@ _recognizer = None
 def get_face_recognizer() -> FaceRecognizer:
     global _recognizer
     if _recognizer is None:
-        _recognizer = FaceRecognizer()
+        _recognizer = FaceRecognizer(mock_mode=settings.USE_MOCK_FACE)
     return _recognizer

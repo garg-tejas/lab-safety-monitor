@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from ...core.config import settings
 from ...core.database import async_session
 from ...ml.pipeline import get_pipeline
+from ...core.model_status import ModelUnavailableError
 from ...services.persistence import PersistenceManager
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,12 @@ async def process_video_task(job_id: str, video_path: str):
     processing_manager.update_job(job_id, status="processing")
 
     pipeline = get_pipeline()
-    pipeline.initialize()
+    try:
+        pipeline.initialize()
+    except ModelUnavailableError as exc:
+        processing_manager.update_job(job_id, status="failed", error=str(exc))
+        return
+    processing_manager.update_job(job_id, inference_mode=pipeline.status()["inference_mode"])
 
     cap = cv2.VideoCapture(video_path)
 
@@ -252,10 +258,11 @@ async def process_video_task(job_id: str, video_path: str):
             await asyncio.sleep(0.001)
 
         # Finalize: close any remaining open violations
-        async with async_session() as session:
-            persistence = PersistenceManager(session)
-            closed_count = await persistence.finalize_video_processing(video_path)
-            total_unique_events += closed_count
+        if pipeline.status()["inference_mode"] != "mock":
+            async with async_session() as session:
+                persistence = PersistenceManager(session)
+                closed_count = await persistence.finalize_video_processing(video_path)
+                total_unique_events += closed_count
 
         # Close video writer
         video_writer.release()
@@ -269,6 +276,9 @@ async def process_video_task(job_id: str, video_path: str):
             output_video=str(output_path) if output_path.exists() else None,
         )
 
+    except ModelUnavailableError as exc:
+        video_writer.release()
+        processing_manager.update_job(job_id, status="failed", error=str(exc))
     except Exception as e:
         video_writer.release()
         import traceback
@@ -464,11 +474,11 @@ async def get_debug_info(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
 
     pipeline = get_pipeline()
-    pipeline.initialize()
 
     # Get detector info
     detector = pipeline.detector
     detector_info = {
+        **pipeline.status(),
         "type": type(detector).__name__,
         "initialized": detector._initialized
         if hasattr(detector, "_initialized")
@@ -546,7 +556,10 @@ async def live_webcam_feed():
 
     # Initialize pipeline
     pipeline = get_pipeline()
-    pipeline.initialize()
+    try:
+        pipeline.initialize()
+    except ModelUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Open webcam
     cap = cv2.VideoCapture(0)

@@ -16,6 +16,7 @@ import { Person } from "@/lib/api";
 import api from "@/lib/api";
 import { Edit2, Check, X, User, Calendar, AlertTriangle, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDemoMode } from "@/providers/demo-context";
 
 interface PersonsTableProps {
   persons: Person[];
@@ -24,6 +25,7 @@ interface PersonsTableProps {
 }
 
 export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTableProps) {
+  const { isDemoMode } = useDemoMode();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState<string>("");
   const [saving, setSaving] = useState(false);
@@ -63,6 +65,7 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
   };
 
   const handleSaveEdit = async (personId: string) => {
+    if (isDemoMode) return;
     setSaving(true);
     try {
       await api.updatePerson(personId, editName.trim() || null);
@@ -197,7 +200,7 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
                         />
                       </div>
                     </div>
-                    <Badge variant={`${complianceColor}-soft` as any} className="tabular-nums min-w-[60px] justify-center">
+                    <Badge variant={`${complianceColor}-soft`} className="tabular-nums min-w-[60px] justify-center">
                       <TrendingUp className="w-3 h-3 mr-1" />
                       {person.compliance_rate.toFixed(1)}%
                     </Badge>
@@ -210,6 +213,7 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
                         size="icon-sm"
                         variant="ghost"
                         onClick={() => handleSaveEdit(person.id)}
+                        aria-label="Save person name"
                         disabled={saving}
                         className="h-8 w-8 text-success hover:text-success hover:bg-success/10"
                       >
@@ -219,6 +223,7 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
                         size="icon-sm"
                         variant="ghost"
                         onClick={handleCancelEdit}
+                        aria-label="Cancel name edit"
                         disabled={saving}
                         className="h-8 w-8 text-danger hover:text-danger hover:bg-danger/10"
                       >
@@ -230,6 +235,9 @@ export function PersonsTable({ persons, loading = false, onUpdate }: PersonsTabl
                       size="icon-sm"
                       variant="ghost"
                       onClick={() => handleStartEdit(person)}
+                      disabled={isDemoMode}
+                      aria-label={isDemoMode ? "Sample person is read only" : `Edit name for ${person.name || person.id}`}
+                      title={isDemoMode ? "Demonstration people are read only" : "Edit name"}
                       className="h-8 w-8 hover:bg-primary/10 hover:text-primary"
                     >
                       <Edit2 className="w-4 h-4" />

@@ -71,7 +71,11 @@ async def lifespan(app: FastAPI):
 
     # Initialize pipeline and load persisted person embeddings
     pipeline = get_pipeline()
-    pipeline.initialize()
+    try:
+        pipeline.initialize()
+    except RuntimeError as exc:
+        # Keep diagnostics/API available while inference is explicitly unavailable.
+        logging.getLogger(__name__).error("Detection pipeline unavailable: %s", exc)
     async with async_session() as session:
         person_service = PersonService(session)
         embeddings = await person_service.get_all_embeddings()
@@ -142,4 +146,5 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy"}
+    inference = get_pipeline().status()
+    return {"status": "healthy" if inference["ready"] else "degraded", "inference": inference}

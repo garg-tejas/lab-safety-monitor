@@ -15,6 +15,7 @@ from .detector_factory import get_detector
 from .temporal_filter import get_temporal_filter
 from .mask_utils import draw_person_with_ppe, draw_frame_info
 from ..core.config import settings
+from ..core.model_status import ModelUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class DetectionPipeline:
 
     def __init__(self):
         self.detector = get_detector()
+        self.ready = False
+        self.last_error = None
         self.temporal_filter = get_temporal_filter()
 
         self.target_fps = settings.FRAME_SAMPLE_RATE
@@ -47,7 +50,21 @@ class DetectionPipeline:
 
     def initialize(self):
         """Initialize all ML models."""
-        self.detector.initialize()
+        try:
+            self.detector.initialize()
+        except Exception as exc:
+            self.ready = False
+            self.last_error = str(exc)
+            raise ModelUnavailableError(f"Detection pipeline unavailable: {exc}") from exc
+        self.ready = True
+        self.last_error = None
+
+    def status(self):
+        return {
+            "ready": self.ready,
+            "inference_mode": "mock" if getattr(self.detector, "mock_mode", False) else "real",
+            "error": self.last_error,
+        }
 
     def process_frame(
         self, frame: np.ndarray, video_source: str = "video"
@@ -75,7 +92,14 @@ class DetectionPipeline:
         }
 
         # Detect persons and PPE
-        detections = self.detector.detect(frame)
+        try:
+            detections = self.detector.detect(frame)
+        except ModelUnavailableError as exc:
+            self.ready = False
+            self.last_error = str(exc)
+            raise
+        result["inference_mode"] = "mock" if detections.get("simulated") else "real"
+        result["simulated"] = bool(detections.get("simulated"))
         persons = detections.get("persons", [])
         ppe_detections = detections.get("ppe_detections", {})
         violation_detections = detections.get("violation_detections", {})
@@ -176,6 +200,9 @@ class DetectionPipeline:
         result["annotated_frame"] = self._annotate_frame(
             frame, result["persons"], violation_detections, action_violations
         )
+        if result["simulated"]:
+            cv2.putText(result["annotated_frame"], "SIMULATED DEMO - NO MODEL INFERENCE", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
         return result
 

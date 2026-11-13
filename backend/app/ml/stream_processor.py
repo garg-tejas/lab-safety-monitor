@@ -117,6 +117,16 @@ class StreamProcessor:
                     continue
                 except Exception as e:
                     logger.error(f"Error in processing worker: {e}", exc_info=True)
+                    # Never keep showing stale detections after inference fails.
+                    error_frame = frame.copy()
+                    cv2.putText(error_frame, "INFERENCE UNAVAILABLE - NO SAFETY ASSESSMENT", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    with self.result_lock:
+                        self.result_cache = {
+                            "annotated_frame": error_frame, "persons": [], "events": [],
+                            "violations": [], "inference_mode": "unavailable", "error": str(e),
+                        }
+                    self.frame_queue.task_done()
         finally:
             loop.close()
     

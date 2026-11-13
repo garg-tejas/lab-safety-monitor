@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useRef } from "react";
-import { toast } from "sonner";
+import { useDemoMode } from "@/providers/demo-context";
 
 // Define types for our WebSocket messages
 export type AlertMessage = {
@@ -19,11 +19,13 @@ export type AlertMessage = {
 type WebSocketContextType = {
   isConnected: boolean;
   lastMessage: AlertMessage | null;
+  recentAlerts: { message: AlertMessage; receivedAt: number }[];
 };
 
 const WebSocketContext = createContext<WebSocketContextType>({
   isConnected: false,
   lastMessage: null,
+  recentAlerts: [],
 });
 
 export function useWebSocket() {
@@ -31,11 +33,14 @@ export function useWebSocket() {
 }
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
+  const { isDemoMode } = useDemoMode();
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<AlertMessage | null>(null);
+  const [recentAlerts, setRecentAlerts] = useState<{ message: AlertMessage; receivedAt: number }[]>([]);
   const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    if (isDemoMode) return;
     // In a real app, URL should come from env vars
     // Using explicit loopback IP to avoid issues
     const wsUrl = "ws://127.0.0.1:8000/api/ws";
@@ -56,14 +61,9 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
         try {
           const data = JSON.parse(event.data);
           setLastMessage(data);
-
-          // Show toast notification
-          // if (data.type === "violation") {
-          //   toast.error(data.title, {
-          //     description: data.message,
-          //     duration: 5000,
-          //   });
-          // }
+          if (data.type === "violation") {
+            setRecentAlerts((previous) => [{ message: data, receivedAt: Date.now() }, ...previous].slice(0, 20));
+          }
         } catch (e) {
           console.error("Failed to parse WS message", e);
         }
@@ -80,10 +80,10 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("WebSocket connection failed", err);
     }
-  }, []);
+  }, [isDemoMode]);
 
   return (
-    <WebSocketContext.Provider value={{ isConnected, lastMessage }}>
+    <WebSocketContext.Provider value={{ isConnected: !isDemoMode && isConnected, lastMessage: isDemoMode ? null : lastMessage, recentAlerts: isDemoMode ? [] : recentAlerts }}>
       {children}
     </WebSocketContext.Provider>
   );

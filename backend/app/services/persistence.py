@@ -48,6 +48,9 @@ class PersistenceManager:
         Returns:
             Dict with 'created_events' and 'closed_events' counts
         """
+        # Explicit mock/demo output must never create real people or safety events.
+        if result.get("simulated") or result.get("inference_mode") == "mock":
+            return {"created_events": 0, "closed_events": 0, "simulated": True}
         persons = result.get("persons", [])
         frame_number = to_python_type(result.get("frame_number", 0))
         timestamp_str = result.get("timestamp")

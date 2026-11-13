@@ -9,6 +9,8 @@ from ..core.config import settings
 from .sam3_detector import SAM3Detector, get_detector as get_sam3_detector
 from .yolov11_detector import YOLOv11Detector, get_yolov11_detector
 
+_mock_detector = None
+
 
 def get_detector() -> Union[SAM3Detector, YOLOv11Detector, "HybridDetector"]:
     """
@@ -19,6 +21,12 @@ def get_detector() -> Union[SAM3Detector, YOLOv11Detector, "HybridDetector"]:
     """
     detector_type = settings.DETECTOR_TYPE.lower()
 
+    if detector_type == "mock" or settings.USE_MOCK_DETECTOR:
+        global _mock_detector
+        if _mock_detector is None:
+            _mock_detector = SAM3Detector(mock_mode=True)
+        return _mock_detector
+
     if detector_type == "hybrid":
         from .hybrid_detector import get_hybrid_detector
 
@@ -27,17 +35,8 @@ def get_detector() -> Union[SAM3Detector, YOLOv11Detector, "HybridDetector"]:
         return get_yolov11_detector()
     elif detector_type == "sam3":
         return get_sam3_detector()
-    elif detector_type == "mock" or settings.USE_MOCK_DETECTOR:
-        # Return SAM3 detector in mock mode
-        detector = get_sam3_detector()
-        detector._initialized = True
-        detector.model = None  # Force mock mode
-        return detector
     else:
-        # Default to hybrid
-        from .hybrid_detector import get_hybrid_detector
-
-        return get_hybrid_detector()
+        raise ValueError(f"Unknown DETECTOR_TYPE: {detector_type}")
 
 
 # Type alias for the detector union
